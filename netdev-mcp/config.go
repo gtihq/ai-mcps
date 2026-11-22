@@ -83,6 +83,31 @@ func loadInventory(path string) ([]device.Config, error) {
 	return out, nil
 }
 
+// renameDeviceInInventory changes the name of one saved device.
+func renameDeviceInInventory(oldName, newName string) error {
+	configs, err := loadInventory("")
+	if err != nil {
+		return err
+	}
+	foundIndex := -1
+	for i := range configs {
+		if strings.EqualFold(configs[i].Name, oldName) {
+			foundIndex = i
+			configs[i].Name = newName
+			break
+		}
+	}
+	if foundIndex < 0 {
+		return fmt.Errorf("device %q not found in inventory", oldName)
+	}
+	for i, cfg := range configs {
+		if i != foundIndex && strings.EqualFold(cfg.Name, newName) {
+			return fmt.Errorf("device %q already exists", newName)
+		}
+	}
+	return writeInventory(configs)
+}
+
 // inventoryPath returns the path shown to users in error and help messages.
 func inventoryPath() string {
 	path, err := filepath.Abs(resolveInventoryPath(""))

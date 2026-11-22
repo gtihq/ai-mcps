@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,35 @@ func newTestSetup(t *testing.T) *setupServer {
 	return setup
 }
 
+func TestSetupOnlyOpensWithoutCredentials(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	t.Setenv(inventoryEnv, path)
+	if err := saveDevices([]device.Config{
+		{Name: "rb", Vendor: device.VendorMikroTik, Host: "10.0.0.1", Username: "admin", Password: "secret"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setup, urls, err := getOrStartSetup(newRegistry(nil))
+	if !errors.Is(err, ErrAlreadyAuthenticated) || setup != nil || len(urls) != 0 {
+		t.Fatalf("setup must not open when authenticated: %v %v %v", setup, urls, err)
+	}
+}
+
+func TestSetupOpensWhenNoCredentials(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	t.Setenv(inventoryEnv, path)
+	if err := saveDevices([]device.Config{
+		{Name: "rb", Vendor: device.VendorMikroTik, Host: "10.0.0.1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setup, urls, err := getOrStartSetup(newRegistry(nil))
+	if err != nil || setup == nil || len(urls) == 0 {
+		t.Fatalf("setup should open without credentials: %v %v %v", setup, urls, err)
+	}
+	setup.shutdown()
+}
+
 func TestSetupPageRequiresToken(t *testing.T) {
 	setup := newTestSetup(t)
 	request := httptest.NewRequest(http.MethodGet, "/setup", nil)
@@ -45,10 +75,10 @@ func TestSetupPageAsksTypeAndStartsEmpty(t *testing.T) {
 	}
 	body := response.Body.String()
 	for _, marker := range []string{
-		"Painel de rede", "Inventário", "Adicionar dispositivo",
-		"Auto (detectar)", "MikroTik RouterOS", "ZTE ZXHN H199A",
-		"Huawei WiFi BE3", "Switch SSH", "Adicionar à lista",
-		"Nenhum dispositivo na lista", "Editar", "Mostrar",
+		"NetDev MCP", "Inventory", "Add device",
+		"Auto (detect)", "MikroTik RouterOS", "ZTE ZXHN H199A",
+		"Huawei WiFi BE3", "Switch SSH", "Add to list",
+		"No devices in the list", "Edit", "Show",
 	} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("form is missing %q", marker)
@@ -58,6 +88,80 @@ func TestSetupPageAsksTypeAndStartsEmpty(t *testing.T) {
 		if strings.Contains(body, stale) {
 			t.Errorf("form still has prefilled device %q", stale)
 		}
+	}
+}
+
+func TestSetupRemoveAndUndo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	t.Setenv(inventoryEnv, path)
+	if err := saveDevices([]device.Config{
+		{Name: "rb", Vendor: device.VendorMikroTik, Host: "10.0.0.1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setup := newTestSetup(t)
+
+	removeBody := url.Values{}
+	removeBody.Set("token", "test-token")
+	removeBody.Set("name", "rb")
+	removeRequest := httptest.NewRequest(http.MethodPost, "/remove?token=test-token", strings.NewReader(removeBody.Encode()))
+	removeRequest.Header.Set("content-type", "application/x-www-form-urlencoded")
+	removeResponse := httptest.NewRecorder()
+	setup.handleRemove(removeResponse, removeRequest)
+	if !strings.Contains(removeResponse.Body.String(), "removed from the inventory") || !strings.Contains(removeResponse.Body.String(), "Undo") {
+		t.Fatalf("remove result missing message or undo: %s", removeResponse.Body.String())
+	}
+	configs, err := loadInventory("")
+	if err != nil || len(configs) != 0 {
+		t.Fatalf("device was not removed: %+v %v", configs, err)
+	}
+
+	undoResponse := httptest.NewRecorder()
+	setup.handleUndo(undoResponse, httptest.NewRequest(http.MethodGet, "/undo?token=test-token", nil))
+	if !strings.Contains(undoResponse.Body.String(), "restored") {
+		t.Fatalf("undo result missing message: %s", undoResponse.Body.String())
+	}
+	configs, err = loadInventory("")
+	if err != nil || len(configs) != 1 || configs[0].Name != "rb" {
+		t.Fatalf("device was not restored: %+v %v", configs, err)
+	}
+}
+
+func TestSetupTestInventoryWithoutNewDevices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	t.Setenv(inventoryEnv, path)
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/system/resource":
+			_, _ = io.WriteString(w, `[{"version":"7.15"}]`)
+		case "/rest/system/identity":
+			_, _ = io.WriteString(w, `[{"name":"rb"}]`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer router.Close()
+	if err := saveDevices([]device.Config{
+		{Name: "rb", Vendor: device.VendorMikroTik, Host: strings.TrimPrefix(router.URL, "http://")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	setup := newTestSetup(t)
+	values := url.Values{}
+	values.Set("token", "test-token")
+	values.Set("test_inventory", "1")
+	request := httptest.NewRequest(http.MethodPost, "/save?token=test-token", strings.NewReader(values.Encode()))
+	request.Header.Set("content-type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	setup.handleSave(response, request)
+	body := response.Body.String()
+	if !strings.Contains(body, "1 device connected") || !strings.Contains(body, "No changes were saved") {
+		t.Fatalf("inventory test result missing: %s", body)
+	}
+	configs, err := loadInventory("")
+	if err != nil || len(configs) != 1 {
+		t.Fatalf("inventory changed during test: %+v %v", configs, err)
 	}
 }
 
@@ -77,7 +181,7 @@ func TestSetupShowsInventorySideBySide(t *testing.T) {
 	body := response.Body.String()
 	for _, marker := range []string{
 		"roteador-sala", "sw-office", "10.0.0.1", "10.0.0.2",
-		"Inventário", "Adicionar dispositivo", "var devices=[",
+		"Inventory", "Add device", "var devices=[",
 	} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("workspace is missing %q", marker)
@@ -207,7 +311,25 @@ func TestSetupSaveAuthenticatesAndPersists(t *testing.T) {
 	defer huaweiServer.Close()
 
 	zteServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("_tag") == "login_token" {
+			_, _ = io.WriteString(w, `<ajax_response_xml_root>123</ajax_response_xml_root>`)
+			return
+		}
+		if r.URL.Query().Get("_tag") == "login_entry" {
+			_, _ = io.WriteString(w, `{"sess_token":"abc"}`)
+			return
+		}
+		if r.URL.Query().Get("_tag") == "lanMgrIpv4" {
+			_, _ = io.WriteString(w, `<html>LAN</html>`)
+			return
+		}
+		if r.URL.Query().Get("_tag") == "dhcp4s_dhcphostinfo_m.lua" {
+			_, _ = io.WriteString(w, `<ajax_response_xml_root><IF_ERRORSTR>SUCC</IF_ERRORSTR></ajax_response_xml_root>`)
+			return
+		}
 		switch {
+		case r.URL.Path == "/":
+			_, _ = io.WriteString(w, `<html><input name="Frm_Username"></html>`)
 		case r.URL.Path == "/login.html":
 			_, _ = io.WriteString(w, `<meta name="csrf_token" content="csrf"/>`)
 		case r.URL.Path == "/login.lua":
@@ -243,13 +365,13 @@ func TestSetupSaveAuthenticatesAndPersists(t *testing.T) {
 		t.Fatalf("want 200, got %d: %s", response.Code, response.Body.String())
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, "Conectado como") {
+	if !strings.Contains(body, "Huawei") || !strings.Contains(body, "ZTE") {
 		t.Fatalf("expected authentication result, got %s", body)
 	}
-	if !strings.Contains(body, "2 dispositivos conectados") {
+	if !strings.Contains(body, "2 devices connected") {
 		t.Fatalf("expected both devices saved, got %s", body)
 	}
-	if !strings.Contains(body, "Concluir") {
+	if !strings.Contains(body, "Finish") {
 		t.Fatalf("result panel must offer the finish action, got %s", body)
 	}
 	if !strings.Contains(body, "var devices=[") || !strings.Contains(body, "be3") {

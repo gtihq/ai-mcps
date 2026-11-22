@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -161,6 +162,75 @@ func tools(reg *Registry) []*mcpserver.Tool {
 			}),
 		},
 		{
+			Name:        "netdev_rename_device",
+			Description: "Rename a device in the NetDev MCP inventory. Requires confirm=true. This only changes local inventory state, not the device itself.",
+			Properties: []mcpserver.NamedProperty{
+				deviceProp,
+				{Name: "new_name", Prop: mcpserver.Property{Type: "string", Description: "New device name."}},
+				{Name: "confirm", Prop: mcpserver.Property{Type: "boolean", Description: "Must be true to apply.", Default: false}},
+			},
+			Required: []string{"device", "new_name", "confirm"},
+			Handler: func(_ context.Context, args map[string]any) (any, error) {
+				if !argBool(args, "confirm") {
+					return omap.From("error", "Rename cancelled: pass confirm=true to proceed."), nil
+				}
+				oldName := argString(args, "device")
+				newName := argString(args, "new_name")
+				if err := reg.Rename(oldName, newName); err != nil {
+					return errorMap(err), nil
+				}
+				return omap.From("status", "renamed", "from", oldName, "to", newName), nil
+			},
+		},
+		{
+			Name:        "netdev_add_reservation",
+			Description: "Create a static DHCP reservation on a device. Requires confirm=true. Use the current IP and MAC from netdev_dhcp_leases or netdev_wifi_clients.",
+			Properties: []mcpserver.NamedProperty{
+				deviceProp,
+				{Name: "name", Prop: mcpserver.Property{Type: "string", Description: "Reservation name."}},
+				{Name: "mac", Prop: mcpserver.Property{Type: "string", Description: "Client MAC address."}},
+				{Name: "ip", Prop: mcpserver.Property{Type: "string", Description: "IP address to reserve."}},
+				{Name: "confirm", Prop: mcpserver.Property{Type: "boolean", Description: "Must be true to apply.", Default: false}},
+			},
+			Required: []string{"device", "name", "mac", "ip", "confirm"},
+			Handler: withDriver(reg, device.CapDhcpReservation, func(ctx context.Context, driver device.Driver) (any, error) {
+				args := argsFromContext(ctx)
+				if !argBool(args, "confirm") {
+					return omap.From("error", "Reservation cancelled: pass confirm=true to proceed."), nil
+				}
+				name := argString(args, "name")
+				mac := argString(args, "mac")
+				ip := argString(args, "ip")
+				if err := driver.(device.ReservationDriver).AddReservation(ctx, name, mac, ip); err != nil {
+					return nil, err
+				}
+				return omap.From("device", argsDevice(ctx), "reservation", omap.From("name", name, "mac", mac, "ip", ip), "status", "saved"), nil
+			}),
+		},
+		{
+			Name:        "netdev_rename_reservation",
+			Description: "Rename an existing DHCP reservation on a device. Requires confirm=true.",
+			Properties: []mcpserver.NamedProperty{
+				deviceProp,
+				{Name: "name", Prop: mcpserver.Property{Type: "string", Description: "Current reservation name."}},
+				{Name: "new_name", Prop: mcpserver.Property{Type: "string", Description: "New reservation name."}},
+				{Name: "confirm", Prop: mcpserver.Property{Type: "boolean", Description: "Must be true to apply.", Default: false}},
+			},
+			Required: []string{"device", "name", "new_name", "confirm"},
+			Handler: withDriver(reg, device.CapRenameReservation, func(ctx context.Context, driver device.Driver) (any, error) {
+				args := argsFromContext(ctx)
+				if !argBool(args, "confirm") {
+					return omap.From("error", "Rename cancelled: pass confirm=true to proceed."), nil
+				}
+				name := argString(args, "name")
+				newName := argString(args, "new_name")
+				if err := driver.(device.ReservationDriver).RenameReservation(ctx, name, newName); err != nil {
+					return nil, err
+				}
+				return omap.From("device", argsDevice(ctx), "from", name, "to", newName, "status", "renamed"), nil
+			}),
+		},
+		{
 			Name:        "netdev_wifi_clients",
 			Description: "List associated Wi-Fi clients with MAC, IP, SSID, radio and signal strength.",
 			Properties:  []mcpserver.NamedProperty{deviceProp},
@@ -171,6 +241,48 @@ func tools(reg *Registry) []*mcpserver.Tool {
 					return nil, err
 				}
 				return omap.From("count", len(result), "clients", device.List(result)), nil
+			}),
+		},
+		{
+			Name:        "netdev_wifi_networks",
+			Description: "List the configured Wi-Fi networks (SSID and band) on a device.",
+			Properties:  []mcpserver.NamedProperty{deviceProp},
+			Required:    []string{"device"},
+			Handler: withDriver(reg, device.CapWiFiConfig, func(ctx context.Context, driver device.Driver) (any, error) {
+				result, err := driver.(device.WiFiConfigDriver).WiFiNetworks(ctx)
+				if err != nil {
+					return nil, err
+				}
+				items := make([]any, 0, len(result))
+				for _, network := range result {
+					items = append(items, omap.From("ssid", network.SSID, "band", network.Band, "enabled", network.Enabled))
+				}
+				return omap.From("count", len(items), "networks", items), nil
+			}),
+		},
+		{
+			Name:        "netdev_set_wifi",
+			Description: "Change the SSID and/or password of a Wi-Fi network. Requires confirm=true. The owner's network is protected and cannot be changed.",
+			Properties: []mcpserver.NamedProperty{
+				deviceProp,
+				{Name: "ssid", Prop: mcpserver.Property{Type: "string", Description: "Current SSID to change."}},
+				{Name: "new_ssid", Prop: mcpserver.Property{Type: "string", Description: "New SSID. Leave empty to keep the current name."}},
+				{Name: "new_password", Prop: mcpserver.Property{Type: "string", Description: "New Wi-Fi password. Leave empty to keep the current password."}},
+				{Name: "confirm", Prop: mcpserver.Property{Type: "boolean", Description: "Must be true to apply.", Default: false}},
+			},
+			Required: []string{"device", "ssid", "confirm"},
+			Handler: withDriver(reg, device.CapWiFiConfig, func(ctx context.Context, driver device.Driver) (any, error) {
+				args := argsFromContext(ctx)
+				if !argBool(args, "confirm") {
+					return omap.From("error", "Wi-Fi update cancelled: pass confirm=true to proceed."), nil
+				}
+				ssid := argString(args, "ssid")
+				newSSID := argString(args, "new_ssid")
+				newPassword := argString(args, "new_password")
+				if err := driver.(device.WiFiConfigDriver).UpdateWiFi(ctx, ssid, newSSID, newPassword); err != nil {
+					return errorMap(err), nil
+				}
+				return omap.From("status", "updated", "ssid", device.StringOr(newSSID, ssid)), nil
 			}),
 		},
 		{
@@ -351,12 +463,18 @@ func tools(reg *Registry) []*mcpserver.Tool {
 			},
 		},
 		{
-			Name: "netdev_setup",
-			Description: "Open a temporary web form. The user picks the device type (Auto, MikroTik, ZTE ZXHN H199A, Huawei WiFi BE3 or SSH switch), gives it a name, enters IP, username and password, and adds it to a list. Repeat as needed, including several devices of the same type. Auto detects the vendor, and a wrong pick falls back to the other drivers.\n" +
-				"The form tests the login on each device, saves only the ones that authenticate to the inventory and then closes itself. Returns the URLs to open, including the Tailscale address. The page expires after 15 minutes.",
-			Properties: []mcpserver.NamedProperty{},
+			Name:        "netdev_setup",
+			Description: "Open a temporary web form only when no device in the inventory has credentials. The user picks the type (Auto, MikroTik, ZTE ZXHN H199A, Huawei WiFi BE3 or SSH switch), gives it a name, enters IP, username and password. Auto detects the vendor and a wrong pick falls back to the other drivers.",
+			Properties:  []mcpserver.NamedProperty{},
 			Handler: func(_ context.Context, _ map[string]any) (any, error) {
 				setup, urls, err := getOrStartSetup(reg)
+				if errors.Is(err, ErrAlreadyAuthenticated) {
+					return omap.From(
+						"status", "not_needed",
+						"message", "Devices are already authenticated in the inventory. The setup page was not opened.",
+						"inventory_path", inventoryPath(),
+					), nil
+				}
 				if err != nil {
 					return errorMap(err), nil
 				}
@@ -367,7 +485,7 @@ func tools(reg *Registry) []*mcpserver.Tool {
 				_ = setup
 				return omap.From(
 					"status", "open",
-					"instructions", "Abra uma das URLs, preencha IP, usuário e senha, selecione o tipo e clique em Testar e salvar.",
+					"instructions", "Open one of the URLs, fill in the IP, username and password, select the type and click Test and save.",
 					"urls", links,
 					"expires_in", "60m",
 					"inventory_path", inventoryPath(),

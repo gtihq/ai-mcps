@@ -74,6 +74,33 @@ func (r *Registry) Reload(configs []device.Config) {
 	}
 }
 
+// Rename changes an inventory name and updates the in-memory registry.
+func (r *Registry) Rename(oldName, newName string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.drivers[oldName]; ok {
+		if driver := r.drivers[oldName]; driver != nil {
+			_ = driver.Close()
+		}
+		delete(r.drivers, oldName)
+	}
+	if err := renameDeviceInInventory(oldName, newName); err != nil {
+		return err
+	}
+	configs, err := loadInventory("")
+	if err != nil {
+		return err
+	}
+	r.configs = make(map[string]device.Config, len(configs))
+	r.order = make([]string, 0, len(configs))
+	for _, cfg := range configs {
+		r.configs[cfg.Name] = cfg
+		r.order = append(r.order, cfg.Name)
+	}
+	sort.Strings(r.order)
+	return nil
+}
+
 // Names returns all device names in stable order.
 func (r *Registry) Names() []string {
 	r.mu.Lock()

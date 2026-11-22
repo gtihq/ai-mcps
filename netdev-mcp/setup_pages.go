@@ -13,7 +13,7 @@ const pageShell = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>netdev-mcp - dispositivos</title>
+<title>NetDev MCP</title>
 <style>
 :root{
   --bg:#111214;
@@ -37,14 +37,14 @@ const pageShell = `<!doctype html>
 *{box-sizing:border-box}
 html{background:var(--bg)}
 body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;display:grid;place-items:center;padding:var(--space-6) var(--space-4)}
-main{width:100%;max-width:980px}
+main{width:100%;max-width:980px;min-width:0}
 header{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-4);margin-bottom:var(--space-6)}
 header > div{max-width:560px}
 h1{font-size:20px;font-weight:500;margin:0;text-wrap:balance;line-height:1.3}
 .sub{color:var(--muted);font-size:13px;line-height:1.5;margin:var(--space-2) 0 0;text-wrap:pretty}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:var(--space-6)}
 @supports (corner-shape:squircle){.card{corner-shape:squircle}}
-.card-title{font-size:14px;font-weight:500;margin:0 0 var(--space-4)}
+.card-title{font-size:14px;font-weight:500;margin:0 0 var(--space-4);text-wrap:balance;overflow-wrap:anywhere}
 .columns{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);align-items:stretch}
 @media(max-width:820px){.columns{grid-template-columns:1fr}}
 label{display:block;font-size:13px;color:var(--muted);margin:0 0 var(--space-2)}
@@ -55,9 +55,9 @@ input:focus-visible,select:focus-visible{outline:2px solid var(--primary);outlin
 .check{display:flex;align-items:center;gap:var(--space-2)}
 .check input[type=checkbox]{width:16px;height:16px;padding:0;margin:0;flex:none}
 .check label{margin:0;color:var(--text)}
-.password-row{display:flex;gap:var(--space-2)}
-.password-row input{flex:1}
-.reveal{flex:none;padding:var(--space-3) var(--space-2)}
+.password-row{position:relative}
+.password-row input{width:100%;padding-right:88px}
+.reveal{position:absolute;right:var(--space-1);top:var(--space-1);bottom:var(--space-1);padding:var(--space-2)}
 .actions{display:flex;gap:var(--space-2);margin-top:var(--space-4)}
 .actions button,.actions .button{flex:1}
 button,.button{border:1px solid transparent;border-radius:var(--radius-control);padding:var(--space-3) var(--space-4);font:inherit;font-size:14px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;line-height:1.2}
@@ -68,14 +68,16 @@ button:hover,.button:hover{opacity:.88}
 .quiet{background:transparent;color:var(--muted);padding:var(--space-2);font-size:13px}
 .list{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-2)}
 .item{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-control);padding:var(--space-3)}
-.item .name{font-size:14px}
-.item .meta{color:var(--muted);font-size:13px;margin-left:var(--space-2)}
+.item > span:first-child{min-width:0}
+.item > span:last-child{display:flex;gap:var(--space-2);flex:none}
+.item .name{font-size:14px;display:block}
+.item .meta{color:var(--muted);font-size:13px;margin-left:var(--space-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item .meta .vendor{color:var(--text)}
 .remove{background:transparent;color:var(--muted);padding:var(--space-1) var(--space-2);font-size:14px}
 .empty{color:var(--muted);font-size:13px;margin:0;padding:var(--space-4);text-align:center;border:1px dashed var(--border);border-radius:var(--radius-control)}
 .result{margin-bottom:var(--space-4)}
 .status{display:grid;gap:var(--space-2)}
-.status-row{display:flex;align-items:flex-start;gap:var(--space-3);background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-control);padding:var(--space-3)}
+.status-row{display:flex;align-items:flex-start;gap:var(--space-3);background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-control);padding:var(--space-3);min-width:0;overflow-wrap:anywhere}
 .dot{width:8px;height:8px;border-radius:50%;flex:none;margin-top:5px;background:var(--muted)}
 .ok .dot{background:var(--success)}
 .fail .dot{background:var(--danger)}
@@ -98,53 +100,56 @@ button:hover,.button:hover{opacity:.88}
 
 const workspaceContent = `<header>
 <div>
-<h1>Painel de rede</h1>
-<p class="sub">Gerencie o inventário e adicione novos roteadores e switches. O servidor expira em 60 minutos.</p>
+<h1>NetDev MCP</h1>
+<p class="sub">Manage the inventory and add routers or switches.</p>
 </div>
-<a class="button quiet" href="/done?token={{TOKEN}}">Encerrar</a>
+<a class="button quiet" href="/done?token={{TOKEN}}">Close</a>
 </header>
 {{RESULT}}
 <div class="columns">
 <div class="card">
-<h2 class="card-title">Inventário</h2>
+<h2 class="card-title">Inventory</h2>
 {{INVENTORY}}
 </div>
 <div class="card">
-<h2 class="card-title">Adicionar dispositivo</h2>
+<h2 class="card-title">Add device</h2>
 <form method="post" action="/save?token={{TOKEN}}" onsubmit="return buildPayload()">
 <input type="hidden" name="token" value="{{TOKEN}}">
-<label for="vendor">Tipo</label>
+<label for="vendor">Type</label>
 <select id="vendor">
-<option value="auto"{{SEL_AUTO}}>Auto (detectar)</option>
+<option value="auto"{{SEL_AUTO}}>Auto (detect)</option>
 <option value="mikrotik"{{SEL_MIKROTIK}}>MikroTik RouterOS</option>
 <option value="zte"{{SEL_ZTE}}>ZTE ZXHN H199A</option>
 <option value="huawei"{{SEL_HUAWEI}}>Huawei WiFi BE3</option>
 <option value="ssh"{{SEL_SSH}}>Switch SSH</option>
 </select>
-<label for="f_name">Nome</label><input id="f_name" placeholder="roteador-sala" autocomplete="off">
-<label for="f_host">IP ou host</label><input id="f_host" placeholder="192.168.88.1" autocomplete="off">
-<label for="f_user">Usuário</label><input id="f_user" value="admin" autocomplete="off">
-<label for="f_password">Senha</label>
+<label for="f_name">Name</label><input id="f_name" placeholder="router-living-room" autocomplete="off">
+<label for="f_host">IP or host</label><input id="f_host" placeholder="192.168.88.1" autocomplete="off">
+<label for="f_user">Username</label><input id="f_user" value="admin" autocomplete="off">
+<label for="f_password">Password</label>
 <div class="password-row">
 <input id="f_password" type="password" autocomplete="new-password">
-<button type="button" id="reveal" class="secondary reveal" aria-label="Mostrar senha" onclick="togglePassword()">Mostrar</button>
+<button type="button" id="reveal" class="secondary reveal" aria-label="Show password" onclick="togglePassword()">Show</button>
 </div>
-<div class="check"><input id="f_tls" type="checkbox"><label for="f_tls">Usar TLS</label></div>
-<div class="actions"><button type="button" class="secondary" onclick="addDevice()">Adicionar à lista</button></div>
+<div class="check"><input id="f_tls" type="checkbox"><label for="f_tls">Use TLS</label></div>
+<div class="actions"><button type="button" class="secondary" onclick="addDevice()">Add to list</button></div>
 <ul id="list" class="list"></ul>
-<p id="empty" class="empty">Nenhum dispositivo na lista.</p>
+<p id="empty" class="empty">No devices in the list.</p>
 <div id="payload"></div>
-<div class="actions"><button type="submit" class="primary">Testar e salvar</button></div>
+<div class="actions"><button type="submit" id="saveBtn" class="primary">Test and save</button></div>
 </form>
 </div>
 </div>
 <script>
 var devices={{DEVICES}};
+var inventory={{INVENTORY_JSON}};
+var editingName='';
 var selected='{{SELECTED}}';
 function render(){
   var list=document.getElementById('list');
   list.innerHTML='';
   document.getElementById('empty').style.display=devices.length?'none':'block';
+  document.getElementById('saveBtn').textContent=editingName?'Save changes':(devices.length?'Test and save':'Test inventory');
   devices.forEach(function(d,i){
     var li=document.createElement('li');
     li.className='item';
@@ -160,18 +165,50 @@ function render(){
     var edit=document.createElement('button');
     edit.type='button';
     edit.className='remove';
-    edit.textContent='Editar';
+    edit.textContent='Edit';
     edit.onclick=(function(index){return function(){editDevice(index)}})(i);
     var remove=document.createElement('button');
     remove.type='button';
     remove.className='remove';
-    remove.textContent='Remover';
+    remove.textContent='Remove';
     remove.onclick=(function(index){return function(){devices.splice(index,1);render()}})(i);
     li.appendChild(text);
     li.appendChild(edit);
     li.appendChild(remove);
     list.appendChild(li);
   });
+}
+function loadFields(d){
+  document.getElementById('f_name').value=d.name;
+  document.getElementById('f_host').value=d.host;
+  document.getElementById('f_user').value=d.username;
+  document.getElementById('f_password').value=d.password;
+  document.getElementById('f_tls').checked=!!d.tls;
+  selected=d.vendor;
+  var select=document.getElementById('vendor');
+  select.value=(d.vendor==='huawei_json')?'huawei':d.vendor;
+  document.getElementById('f_host').focus();
+}
+function editInventory(name){
+  var found=inventory.filter(function(c){return c.name===name})[0];
+  if(!found){return}
+  editingName=name;
+  devices=[];
+  loadFields(found);
+  render();
+}
+function removeInventory(name){
+  var form=document.createElement('form');
+  form.method='post';
+  form.action='/remove?token={{TOKEN}}';
+  var token=document.createElement('input');
+  token.type='hidden'; token.name='token'; token.value='{{TOKEN}}';
+  var field=document.createElement('input');
+  field.type='hidden'; field.name='name'; field.value=name;
+  form.appendChild(token);
+  form.appendChild(field);
+  document.body.appendChild(form);
+  form.submit();
 }
 function editDevice(index){
   var d=devices[index];
@@ -191,12 +228,12 @@ function togglePassword(){
   var button=document.getElementById('reveal');
   if(input.type==='password'){
     input.type='text';
-    button.textContent='Ocultar';
-    button.setAttribute('aria-label','Ocultar senha');
+    button.textContent='Hide';
+    button.setAttribute('aria-label','Hide password');
   }else{
     input.type='password';
-    button.textContent='Mostrar';
-    button.setAttribute('aria-label','Mostrar senha');
+    button.textContent='Show';
+    button.setAttribute('aria-label','Show password');
   }
 }
 function addDevice(){
@@ -205,6 +242,7 @@ function addDevice(){
   if(host===''){document.getElementById('f_host').focus();return}
   if(name===''){name=selected+'-'+(devices.length+1)}
   devices.push({name:name,vendor:selected,host:host,username:document.getElementById('f_user').value,password:document.getElementById('f_password').value,tls:document.getElementById('f_tls').checked});
+  editingName='';
   render();
   document.getElementById('f_name').value='';
   document.getElementById('f_host').value='';
@@ -213,9 +251,21 @@ function addDevice(){
   document.getElementById('f_name').focus();
 }
 function buildPayload(){
-  if(devices.length===0){document.getElementById('f_host').focus();return false}
   var box=document.getElementById('payload');
   box.innerHTML='';
+  var editing=document.createElement('input');
+  editing.type='hidden';
+  editing.name='editing_name';
+  editing.value=editingName;
+  box.appendChild(editing);
+  if(devices.length===0){
+    var test=document.createElement('input');
+    test.type='hidden';
+    test.name='test_inventory';
+    test.value='1';
+    box.appendChild(test);
+    return true;
+  }
   devices.forEach(function(d){
     ['name','vendor','host','username','password','tls'].forEach(function(key){
       var input=document.createElement('input');
@@ -234,31 +284,31 @@ render();
 const resultPanelContent = `<section class="card result">
 <h2 class="card-title">{{SUMMARY}}</h2>
 <div class="status">{{ROWS}}</div>
-<div class="actions"><a class="button primary" href="/done?token={{TOKEN}}">Concluir</a></div>
+<div class="actions">{{UNDO}}<a class="button primary" href="/done?token={{TOKEN}}">Finish</a></div>
 </section>`
 
 const doneContent = `<header>
 <div>
-<h1>Pronto</h1>
-<p class="sub">O servidor temporário foi encerrado.</p>
+<h1>Done</h1>
+<p class="sub">The temporary server has been closed.</p>
 </div>
 </header>
 <div class="card">
-<p class="sub">Você pode voltar a usar o MCP normalmente.</p>
+<p class="sub">You can use the MCP normally again.</p>
 <div class="actions">
-<button type="button" class="primary" onclick="closePage()">Fechar página</button>
+<button type="button" class="primary" onclick="closePage()">Close page</button>
 </div>
 </div>
 <script>
 function closePage(){
   window.close();
-  document.body.innerHTML='<p class="sub">Se a aba não fechou, você pode fechar esta janela manualmente.</p>';
+  document.body.innerHTML='<p class="sub">If the tab did not close, you can close this window manually.</p>';
 }
 </script>`
 
 // renderSetupPage builds the full workspace: inventory on the left, add form
 // on the right, queued devices preserved and an optional result panel.
-func renderSetupPage(token string, queued, inventory []device.Config, results []deviceResult, summary string) string {
+func renderSetupPage(token string, queued, inventory []device.Config, results []deviceResult, summary string, undo bool) string {
 	items := make([]map[string]string, 0, len(queued))
 	selected := "auto"
 	for _, cfg := range queued {
@@ -272,28 +322,44 @@ func renderSetupPage(token string, queued, inventory []device.Config, results []
 	}
 	data, _ := json.Marshal(items)
 	devicesJSON := strings.ReplaceAll(string(data), "<", `\u003c`)
+	inventoryItems := make([]map[string]string, 0, len(inventory))
+	for _, cfg := range inventory {
+		inventoryItems = append(inventoryItems, map[string]string{
+			"name": cfg.Name, "vendor": string(cfg.Vendor), "host": cfg.Host,
+			"username": cfg.Username, "password": cfg.Password, "tls": boolText(cfg.TLS),
+		})
+	}
+	inventoryData, _ := json.Marshal(inventoryItems)
+	inventoryJSON := strings.ReplaceAll(string(inventoryData), "<", `\u003c`)
 
 	var rows strings.Builder
 	for _, cfg := range inventory {
+		safeName := template.JSEscapeString(cfg.Name)
 		rows.WriteString(`<li class="item"><span><span class="name">`)
 		rows.WriteString(template.HTMLEscapeString(cfg.Name))
 		rows.WriteString(`</span><span class="meta"><span class="vendor">`)
 		rows.WriteString(template.HTMLEscapeString(vendorName(cfg.Vendor)))
 		rows.WriteString(`</span> · `)
 		rows.WriteString(template.HTMLEscapeString(cfg.Host))
-		rows.WriteString(`</span></span><span class="dot" style="background:var(--success)"></span></li>`)
+		rows.WriteString(`</span></span><span><button type="button" class="remove" onclick="editInventory('` + safeName + `')">Edit</button>`)
+		rows.WriteString(`<button type="button" class="remove" onclick="removeInventory('` + safeName + `')">Delete</button></span></li>`)
 	}
-	inventoryHTML := `<p class="empty">Nenhum dispositivo salvo ainda.</p>`
+	inventoryHTML := `<p class="empty">No devices saved yet.</p>`
 	if rows.Len() > 0 {
 		inventoryHTML = `<ul class="list">` + rows.String() + `</ul>`
 	}
 
 	resultHTML := ""
 	if len(results) > 0 {
+		undoHTML := ""
+		if undo {
+			undoHTML = `<a class="button secondary" href="/undo?token=` + template.HTMLEscapeString(token) + `">Undo</a>`
+		}
 		resultHTML = replaceAll(resultPanelContent, map[string]string{
 			"{{SUMMARY}}": summary,
 			"{{ROWS}}":    resultRows(results),
 			"{{TOKEN}}":   template.HTMLEscapeString(token),
+			"{{UNDO}}":    undoHTML,
 		})
 	}
 
@@ -314,11 +380,12 @@ func renderSetupPage(token string, queued, inventory []device.Config, results []
 		selects["{{SEL_AUTO}}"] = " selected"
 	}
 	replacements := map[string]string{
-		"{{TOKEN}}":     template.HTMLEscapeString(token),
-		"{{DEVICES}}":   devicesJSON,
-		"{{SELECTED}}":  template.JSEscapeString(selected),
-		"{{INVENTORY}}": inventoryHTML,
-		"{{RESULT}}":    resultHTML,
+		"{{TOKEN}}":          template.HTMLEscapeString(token),
+		"{{DEVICES}}":        devicesJSON,
+		"{{INVENTORY_JSON}}": inventoryJSON,
+		"{{SELECTED}}":       template.JSEscapeString(selected),
+		"{{INVENTORY}}":      inventoryHTML,
+		"{{RESULT}}":         resultHTML,
 	}
 	for key, value := range selects {
 		replacements[key] = value
@@ -343,7 +410,7 @@ func resultRows(results []deviceResult) string {
 		b.WriteString(`</div>`)
 		b.WriteString(`<div class="reason">` + template.HTMLEscapeString(result.Message) + `</div>`)
 		if result.Detail != "" {
-			b.WriteString(`<details class="detail"><summary>Detalhes</summary>`)
+			b.WriteString(`<details class="detail"><summary>Details</summary>`)
 			b.WriteString(`<div class="reason">` + template.HTMLEscapeString(result.Detail) + `</div></details>`)
 		}
 		b.WriteString(`</div></div>`)

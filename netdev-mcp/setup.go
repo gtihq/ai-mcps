@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -33,6 +34,7 @@ type setupServer struct {
 	lastMsg     string
 	lastQueued  []device.Config
 	lastResults []deviceResult
+	lastRemoved *device.Config
 	closeOnce   sync.Once
 	done        chan struct{}
 }
@@ -73,6 +75,8 @@ func startSetup(reg *Registry) (*setupServer, []string, error) {
 	mux.HandleFunc("/", setup.handleRoot)
 	mux.HandleFunc("/save", setup.handleSave)
 	mux.HandleFunc("/done", setup.handleDone)
+	mux.HandleFunc("/remove", setup.handleRemove)
+	mux.HandleFunc("/undo", setup.handleUndo)
 	setup.server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
 	go func() {
@@ -146,7 +150,7 @@ func (s *setupServer) validToken(r *http.Request) bool {
 // handleRoot serves the onboarding form or the result page after saving.
 func (s *setupServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if !s.validToken(r) {
-		http.Error(w, "token inválido ou expirado", http.StatusForbidden)
+		http.Error(w, "invalid or expired token", http.StatusForbidden)
 		return
 	}
 	if r.URL.Path != "/setup" {
@@ -163,14 +167,14 @@ func (s *setupServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 		inventory = nil
 	}
 	w.Header().Set("content-type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, renderSetupPage(s.token, queued, inventory, results, message))
+	_, _ = io.WriteString(w, renderSetupPage(s.token, queued, inventory, results, message, false))
 }
 
 // handleSave validates every submitted device concurrently and persists the
 // ones that authenticated successfully.
 func (s *setupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost || !s.validToken(r) {
-		http.Error(w, "requisição inválida ou token expirado", http.StatusForbidden)
+		http.Error(w, "invalid request or expired token", http.StatusForbidden)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -202,7 +206,7 @@ func (s *setupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if host == "" {
-			items = append(items, submission{skip: true, msg: "Informe o IP ou host."})
+			items = append(items, submission{skip: true, msg: "Enter an IP address or host."})
 			continue
 		}
 		if name == "" {
@@ -224,10 +228,20 @@ func (s *setupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 		}
 		queued = append(queued, cfg)
 		if err := cfg.Validate(); err != nil {
-			items = append(items, submission{config: cfg, skip: true, msg: "Verifique o tipo e o endereço."})
+			items = append(items, submission{config: cfg, skip: true, msg: "Check the type and address."})
 			continue
 		}
 		items = append(items, submission{config: cfg})
+	}
+
+	testingOnly := r.PostFormValue("test_inventory") == "1"
+	if len(items) == 0 && testingOnly {
+		configs, err := loadInventory("")
+		if err == nil {
+			for _, cfg := range configs {
+				items = append(items, submission{config: cfg})
+			}
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -264,7 +278,7 @@ func (s *setupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 			}
 			items[index].ok = true
 			items[index].config.Vendor = driver.Vendor()
-			items[index].msg = fmt.Sprintf("Conectado como %s · %s %s", friendlyVendor(driver.Vendor()), info.Hostname, info.Version)
+			items[index].msg = fmt.Sprintf("%s · %s %s", friendlyVendor(driver.Vendor()), info.Hostname, info.Version)
 		}(i)
 	}
 	wg.Wait()
@@ -283,12 +297,21 @@ func (s *setupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	message := connectionSummary(connected, len(items))
-	if len(saved) > 0 {
-		if err := saveDevices(saved); err != nil {
-			message += " Não foi possível salvar o inventário: " + err.Error()
+	if testingOnly {
+		message += " No changes were saved."
+	} else if len(saved) > 0 {
+		editingName := strings.TrimSpace(r.PostFormValue("editing_name"))
+		var err error
+		if editingName != "" {
+			err = replaceInventoryDevice(editingName, saved)
 		} else {
-			configs, err := loadInventory("")
-			if err == nil {
+			err = saveDevices(saved)
+		}
+		if err != nil {
+			message += " Could not save the inventory: " + err.Error()
+		} else {
+			configs, loadErr := loadInventory("")
+			if loadErr == nil {
 				s.registry.Reload(configs)
 			}
 		}
@@ -304,7 +327,7 @@ func (s *setupServer) handleSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("content-type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, renderSetupPage(s.token, queued, inventory, results, message))
+	_, _ = io.WriteString(w, renderSetupPage(s.token, queued, inventory, results, message, false))
 }
 
 // friendlyVendor is the name shown in the result message.
@@ -325,24 +348,24 @@ func friendlyVendor(vendor device.Vendor) string {
 	}
 }
 
-// connectionSummary keeps Portuguese pluralization correct in the result title.
+// connectionSummary builds the result title with correct pluralization.
 func connectionSummary(connected, total int) string {
 	switch {
 	case total == 0:
-		return "Nenhum dispositivo enviado."
+		return "No devices submitted."
 	case connected == 0:
-		return "Nenhum dispositivo conectado."
+		return "No devices connected."
 	case connected == 1:
-		return "1 dispositivo conectado."
+		return "1 device connected."
 	default:
-		return fmt.Sprintf("%d dispositivos conectados.", connected)
+		return fmt.Sprintf("%d devices connected.", connected)
 	}
 }
 
 // handleDone shuts the temporary server down after the result page loads.
 func (s *setupServer) handleDone(w http.ResponseWriter, r *http.Request) {
 	if !s.validToken(r) {
-		http.Error(w, "token inválido", http.StatusForbidden)
+		http.Error(w, "invalid token", http.StatusForbidden)
 		return
 	}
 	w.Header().Set("content-type", "text/html; charset=utf-8")
@@ -351,6 +374,88 @@ func (s *setupServer) handleDone(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
 		s.shutdown()
 	}()
+}
+
+// handleRemove deletes one inventory entry and offers an undo action.
+func (s *setupServer) handleRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || !s.validToken(r) {
+		http.Error(w, "invalid request or expired token", http.StatusForbidden)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	configs, err := loadInventory("")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	kept := make([]device.Config, 0, len(configs))
+	var removed *device.Config
+	for _, cfg := range configs {
+		if strings.EqualFold(cfg.Name, name) {
+			copyCfg := cfg
+			removed = &copyCfg
+			continue
+		}
+		kept = append(kept, cfg)
+	}
+	message := "Device not found."
+	results := []deviceResult{}
+	undo := false
+	if removed != nil {
+		if err := writeInventory(kept); err != nil {
+			message = "Could not remove: " + err.Error()
+		} else {
+			s.mu.Lock()
+			s.lastRemoved = removed
+			s.mu.Unlock()
+			message = name + " removed from the inventory."
+			results = append(results, deviceResult{Name: name, OK: true, Message: message})
+			undo = true
+			if refreshed, loadErr := loadInventory(""); loadErr == nil {
+				s.registry.Reload(refreshed)
+			}
+		}
+	}
+	s.renderInventoryView(w, message, results, undo)
+}
+
+// handleUndo restores the most recently removed device.
+func (s *setupServer) handleUndo(w http.ResponseWriter, r *http.Request) {
+	if !s.validToken(r) {
+		http.Error(w, "invalid token", http.StatusForbidden)
+		return
+	}
+	s.mu.Lock()
+	removed := s.lastRemoved
+	s.lastRemoved = nil
+	s.mu.Unlock()
+	message := "Nothing to undo."
+	results := []deviceResult{}
+	if removed != nil {
+		if err := saveDevices([]device.Config{*removed}); err == nil {
+			message = removed.Name + " restored."
+			results = append(results, deviceResult{Name: removed.Name, OK: true, Message: message})
+			if refreshed, loadErr := loadInventory(""); loadErr == nil {
+				s.registry.Reload(refreshed)
+			}
+		} else {
+			message = "Could not restore: " + err.Error()
+		}
+	}
+	s.renderInventoryView(w, message, results, false)
+}
+
+// renderInventoryView renders the workspace after an inventory-only action.
+func (s *setupServer) renderInventoryView(w http.ResponseWriter, message string, results []deviceResult, undo bool) {
+	s.mu.Lock()
+	queued := append([]device.Config(nil), s.lastQueued...)
+	s.mu.Unlock()
+	inventory, err := loadInventory("")
+	if err != nil {
+		inventory = nil
+	}
+	w.Header().Set("content-type", "text/html; charset=utf-8")
+	_, _ = io.WriteString(w, renderSetupPage(s.token, queued, inventory, results, message, undo))
 }
 
 // saveDevices merges the supplied devices into the existing inventory file.
@@ -375,6 +480,47 @@ func saveDevices(incoming []device.Config) error {
 			document.Devices = append(document.Devices, cfg)
 		}
 	}
+	return writeInventory(document.Devices)
+}
+
+// replaceInventoryDevice removes the old name before saving the edited entry,
+// so renaming a device does not leave a duplicate behind.
+func replaceInventoryDevice(oldName string, incoming []device.Config) error {
+	path := resolveInventoryPath("")
+	document := struct {
+		Devices []device.Config `json:"devices"`
+	}{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &document)
+	}
+	kept := make([]device.Config, 0, len(document.Devices))
+	for _, cfg := range document.Devices {
+		if !strings.EqualFold(cfg.Name, oldName) {
+			kept = append(kept, cfg)
+		}
+	}
+	for _, cfg := range incoming {
+		replaced := false
+		for i, existing := range kept {
+			if strings.EqualFold(existing.Name, cfg.Name) {
+				kept[i] = cfg
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			kept = append(kept, cfg)
+		}
+	}
+	return writeInventory(kept)
+}
+
+// writeInventory persists the full device list with owner-only permissions.
+func writeInventory(configs []device.Config) error {
+	path := resolveInventoryPath("")
+	document := struct {
+		Devices []device.Config `json:"devices"`
+	}{Devices: configs}
 	data, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		return err
@@ -385,8 +531,30 @@ func saveDevices(incoming []device.Config) error {
 	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
+// ErrAlreadyAuthenticated tells the tool layer that the inventory already
+// has credentials, so the onboarding page must not be opened.
+var ErrAlreadyAuthenticated = errors.New("devices are already authenticated in the inventory")
+
+// inventoryAuthenticated reports whether at least one saved device has both
+// username and password. The setup screen is only needed when this is false.
+func inventoryAuthenticated() bool {
+	configs, err := loadInventory("")
+	if err != nil || len(configs) == 0 {
+		return false
+	}
+	for _, cfg := range configs {
+		if strings.TrimSpace(cfg.Username) != "" && strings.TrimSpace(cfg.Password) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // getOrStartSetup returns the active setup server or starts a new one.
 func getOrStartSetup(reg *Registry) (*setupServer, []string, error) {
+	if inventoryAuthenticated() {
+		return nil, nil, ErrAlreadyAuthenticated
+	}
 	activeSetupMu.Lock()
 	defer activeSetupMu.Unlock()
 	if activeSetup != nil {
@@ -419,10 +587,10 @@ func setupStatusMap() *omap.M {
 	setup := activeSetup
 	activeSetupMu.Unlock()
 	if setup == nil {
-		return omap.From("running", false, "message", "Nenhum servidor de configuração ativo. Chame netdev_setup para abrir um.")
+		return omap.From("running", false, "message", "No setup server is running. Call netdev_setup to open one.")
 	}
 	setup.mu.Lock()
 	message := setup.lastMsg
 	setup.mu.Unlock()
-	return omap.From("running", true, "message", device.StringOr(message, "Aguardando o preenchimento do formulário."))
+	return omap.From("running", true, "message", device.StringOr(message, "Waiting for the form to be filled in."))
 }

@@ -10,7 +10,7 @@ import (
 func TestExplainFocusesPreferredVendor(t *testing.T) {
 	err := &DetectError{Reasons: []Reason{
 		{Vendor: device.VendorMikroTik, Message: "HTTP 404", Detail: "routeros rest: HTTP 404"},
-		{Vendor: device.VendorZTE, Message: "login não encontrado neste firmware", Detail: "zte: login failed: /login.lua resposta de erro"},
+		{Vendor: device.VendorZTE, Message: "login not found on this firmware", Detail: "zte: login failed: /login.lua error response"},
 	}}
 	explanation := Explain(err, device.VendorZTE)
 	if !strings.Contains(explanation.Headline, "ZTE") || !strings.Contains(explanation.Headline, "login") {

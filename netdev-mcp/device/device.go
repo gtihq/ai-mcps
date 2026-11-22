@@ -27,21 +27,24 @@ const (
 
 // Capability names advertised by drivers and exposed through the MCP tools.
 const (
-	CapSystem       = "system_info"
-	CapInterfaces   = "interfaces"
-	CapIPAddresses  = "ip_addresses"
-	CapRoutes       = "routes"
-	CapNeighbors    = "neighbors"
-	CapDHCP         = "dhcp_leases"
-	CapWiFi         = "wifi_clients"
-	CapFirewall     = "firewall"
-	CapPortForwards = "port_forwards"
-	CapLogs         = "logs"
-	CapPing         = "ping"
-	CapConfig       = "config"
-	CapReboot       = "reboot"
-	CapCommand      = "command"
-	CapHTTP         = "http"
+	CapSystem            = "system_info"
+	CapInterfaces        = "interfaces"
+	CapIPAddresses       = "ip_addresses"
+	CapRoutes            = "routes"
+	CapNeighbors         = "neighbors"
+	CapDHCP              = "dhcp_leases"
+	CapDhcpReservation   = "dhcp_reservation"
+	CapRenameReservation = "rename_reservation"
+	CapWiFiConfig        = "wifi_config"
+	CapWiFi              = "wifi_clients"
+	CapFirewall          = "firewall"
+	CapPortForwards      = "port_forwards"
+	CapLogs              = "logs"
+	CapPing              = "ping"
+	CapConfig            = "config"
+	CapReboot            = "reboot"
+	CapCommand           = "command"
+	CapHTTP              = "http"
 )
 
 // Common errors returned by drivers and by the tool layer.
@@ -157,6 +160,26 @@ type NeighborDriver interface {
 // DHCPDriver lists active DHCP leases.
 type DHCPDriver interface {
 	DHCPLeases(ctx context.Context) ([]DHCPLease, error)
+}
+
+// ReservationDriver creates and renames static DHCP bindings.
+type ReservationDriver interface {
+	AddReservation(ctx context.Context, name, mac, ip string) error
+	RenameReservation(ctx context.Context, oldName, newName string) error
+}
+
+// WiFiNetwork is one configured wireless network.
+type WiFiNetwork struct {
+	SSID    string
+	Band    string
+	Enabled bool
+	ID      string
+}
+
+// WiFiConfigDriver reads and updates wireless network settings.
+type WiFiConfigDriver interface {
+	WiFiNetworks(ctx context.Context) ([]WiFiNetwork, error)
+	UpdateWiFi(ctx context.Context, ssid, newSSID, newPassword string) error
 }
 
 // WiFiDriver lists associated wireless clients.

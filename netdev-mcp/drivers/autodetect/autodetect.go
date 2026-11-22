@@ -56,7 +56,7 @@ func (e *DetectError) Error() string {
 	for _, reason := range e.Reasons {
 		parts = append(parts, vendorLabel(reason.Vendor)+": "+reason.Message)
 	}
-	return "detecção falhou: " + strings.Join(parts, " · ")
+	return "detection failed: " + strings.Join(parts, " · ")
 }
 
 // Explanation separates the headline shown in the result row from the full
@@ -91,7 +91,7 @@ func Explain(err error, preferred device.Vendor) Explanation {
 		parts = append(parts, vendorLabel(reason.Vendor)+" "+reason.Message)
 	}
 	if detail == "" {
-		detail = strings.Join(parts, " · ") + ". Confira o IP e as credenciais."
+		detail = strings.Join(parts, " · ") + ". Check the IP address and credentials."
 	} else if len(detail) > 320 {
 		detail = detail[:320] + "…"
 	}
@@ -117,27 +117,27 @@ func vendorLabel(vendor device.Vendor) string {
 // shortReason maps an internal error to a plain phrase.
 func shortReason(vendor device.Vendor, err error) string {
 	if err == nil {
-		return "sem resposta"
+		return "no response"
 	}
 	text := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(text, "http 404"):
 		return "HTTP 404"
 	case strings.Contains(text, "cannot obtain csrf token"):
-		return "sem token de acesso"
+		return "no access token"
 	case strings.Contains(text, "login failed"):
-		return "login não encontrado neste firmware"
-	case strings.Contains(text, "connectex"), strings.Contains(text, "connection refused"), strings.Contains(text, "recusou ativamente"):
+		return "login not found on this firmware"
+	case strings.Contains(text, "connectex"), strings.Contains(text, "connection refused"), strings.Contains(text, "actively refused"), strings.Contains(text, "recusou ativamente"):
 		if vendor == device.VendorSSH {
-			return "porta 22 fechada"
+			return "port 22 closed"
 		}
-		return "sem conexão"
+		return "no connection"
 	case strings.Contains(text, "i/o timeout"), strings.Contains(text, "context deadline"), strings.Contains(text, "tempo limite"):
-		return "sem resposta"
+		return "no response"
 	case strings.Contains(text, "401"), strings.Contains(text, "unauthorized"):
-		return "credenciais recusadas"
+		return "credentials rejected"
 	default:
-		return "falha"
+		return "failed"
 	}
 }
 

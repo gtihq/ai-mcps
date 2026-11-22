@@ -6,8 +6,12 @@ package zte
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/gtihq/ai-mcps/netdev-mcp/device"
@@ -24,13 +28,22 @@ const (
 	pathWiFi       = "/getpage.lua?pid=1003"
 	pathForwards   = "/getpage.lua?pid=1004"
 	pathLogs       = "/getpage.lua?pid=1005"
+
+	// Endpoints used by the ZXHN H199A V9.1 web UI. The browser keeps the same
+	// URL and loads data through these menuData/menuView requests.
+	pathTokenLua    = "/?_type=loginData&_tag=login_token"
+	pathLoginLua    = "/?_type=loginData&_tag=login_entry"
+	pathLandingLua  = "/?_type=menuView&_tag=lanMgrIpv4"
+	pathHostInfoLua = "/?_type=menuData&_tag=dhcp4s_dhcphostinfo_m.lua"
+	pathBindingLua  = "/?_type=menuData&_tag=dhcp4s_dhcpbinding_m.lua"
 )
 
 // Driver talks to the ZTE web UI.
 type Driver struct {
-	cfg      device.Config
-	web      *webclient.Client
-	tlsTried bool
+	cfg          device.Config
+	web          *webclient.Client
+	tlsTried     bool
+	sessionToken string
 }
 
 // New creates a ZTE driver without opening a connection.
@@ -38,6 +51,10 @@ func New(cfg device.Config) (device.Driver, error) {
 	web, err := webclient.New(cfg, 80, false)
 	if err != nil {
 		return nil, err
+	}
+	web.ExtraHeaders = map[string]string{
+		"User-Agent":       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+		"X-Requested-With": "XMLHttpRequest",
 	}
 	return &Driver{cfg: cfg, web: web}, nil
 }
@@ -49,6 +66,7 @@ func (d *Driver) Vendor() device.Vendor { return device.VendorZTE }
 func (d *Driver) Capabilities() []string {
 	caps := []string{
 		device.CapSystem, device.CapInterfaces, device.CapDHCP,
+		device.CapDhcpReservation, device.CapRenameReservation,
 		device.CapWiFi, device.CapPortForwards, device.CapLogs,
 		device.CapCommand, device.CapHTTP,
 	}
@@ -109,6 +127,9 @@ func (d *Driver) ensure(ctx context.Context) error {
 
 // tryLogin walks every known login combination over the current client.
 func (d *Driver) tryLogin(ctx context.Context) error {
+	if d.tryMenuLogin(ctx) {
+		return nil
+	}
 	loginPages := []string{
 		d.cfg.Endpoint("login_page", pathLoginPage),
 		"/",
@@ -174,7 +195,7 @@ func (d *Driver) tryLogin(ctx context.Context) error {
 			continue
 		}
 		if !d.sessionConfirmed(ctx) {
-			attempts = append(attempts, candidate.path+": sessão não confirmada")
+			attempts = append(attempts, candidate.path+": session not confirmed")
 			continue
 		}
 		d.web.LoggedIn = true
@@ -183,19 +204,79 @@ func (d *Driver) tryLogin(ctx context.Context) error {
 	return &LoginError{Attempts: attempts}
 }
 
+// tryMenuLogin handles the ZXHN H199A V9.1 flow: read the one-time token,
+// post the form credentials, then confirm with a menuData request.
+func (d *Driver) tryMenuLogin(ctx context.Context) bool {
+	if _, err := d.web.Get(ctx, "/"); err != nil {
+		return false
+	}
+	// The page first reads a session token from login_entry, then hashes the
+	// password with the token returned by login_token.
+	sessionData, err := d.web.Get(ctx, pathLoginLua)
+	if err != nil {
+		return false
+	}
+	sessionToken := ""
+	if match := regexp.MustCompile(`"sess_token":"([^"]+)"`).FindSubmatch(sessionData); len(match) > 1 {
+		sessionToken = string(match[1])
+	}
+	tokenData, err := d.web.Get(ctx, pathTokenLua)
+	if err != nil {
+		return false
+	}
+	token := ""
+	if match := regexp.MustCompile(`>([0-9]+)<`).FindSubmatch(tokenData); len(match) > 1 {
+		token = string(match[1])
+	}
+	digest := sha256.Sum256([]byte(d.cfg.Password + token))
+	values := url.Values{}
+	values.Set("Password", hex.EncodeToString(digest[:]))
+	values.Set("Username", d.cfg.Username)
+	values.Set("action", "login")
+	values.Set("_sessionTOKEN", sessionToken)
+	data, err := d.web.PostForm(ctx, pathLoginLua, values)
+	if err != nil {
+		return false
+	}
+	text := string(data)
+	if !strings.Contains(text, `"sess_token"`) || strings.Contains(text, `"lockingTime":-1`) {
+		return false
+	}
+	if strings.Contains(text, `"loginErrMsg":"`) && !strings.Contains(text, `"loginErrMsg":""`) {
+		return false
+	}
+	if match := regexp.MustCompile(`"sess_token":"([^"]+)"`).FindStringSubmatch(text); len(match) > 1 {
+		d.sessionToken = match[1]
+	}
+	// Loading the landing page after login rotates the SID cookie and makes
+	// the menuData endpoints available. Without this step every read returns
+	// SessionTimeout.
+	if _, err := d.web.Get(ctx, d.cfg.Endpoint("landing", pathLandingLua)); err != nil {
+		return false
+	}
+	if !d.sessionConfirmed(ctx) {
+		return false
+	}
+	d.web.LoggedIn = true
+	return true
+}
+
 // sessionConfirmed checks that a follow up page is no longer the login form.
 func (d *Driver) sessionConfirmed(ctx context.Context) bool {
-	path := d.cfg.Endpoint("session_check", "/getpage.lua?pid=1000")
+	path := d.cfg.Endpoint("session_check", pathHostInfoLua)
 	data, err := d.web.Get(ctx, path)
+	if err == nil && strings.Contains(strings.ToLower(string(data)), "sessiontimeout") {
+		return false
+	}
 	if err != nil {
 		pathData, fallbackErr := d.web.Get(ctx, "/")
 		if fallbackErr != nil {
-			return true
+			return false
 		}
 		data = pathData
 	}
 	lower := strings.ToLower(string(data))
-	for _, marker := range []string{"name=\"password\"", "name='password'", "/login.lua", "<title>login"} {
+	for _, marker := range []string{"name=\"password\"", "name='password'", "frm_password", "/login.lua", "<title>login"} {
 		if strings.Contains(lower, marker) {
 			return false
 		}
@@ -214,11 +295,11 @@ func briefError(err error) string {
 	case strings.Contains(text, "http 401"):
 		return "HTTP 401"
 	case strings.Contains(text, "connectex"), strings.Contains(text, "connection refused"), strings.Contains(text, "recusou"):
-		return "sem conexão"
+		return "no connection"
 	case strings.Contains(text, "timeout"), strings.Contains(text, "tempo limite"):
-		return "sem resposta"
+		return "no response"
 	default:
-		return "falha"
+		return "failed"
 	}
 }
 
@@ -300,22 +381,128 @@ func (d *Driver) Interfaces(ctx context.Context) ([]device.Interface, error) {
 
 // DHCPLeases reads the LAN client list.
 func (d *Driver) DHCPLeases(ctx context.Context) ([]device.DHCPLease, error) {
-	rows, err := d.fetch(ctx, "dhcp", pathDHCP)
+	if err := d.ensure(ctx); err != nil {
+		return nil, err
+	}
+	data, err := d.web.Get(ctx, d.cfg.Endpoint("dhcp_binding", pathBindingLua))
 	if err != nil {
 		return nil, err
+	}
+	rows := parseMenuInstances(data)
+	if len(rows) == 0 {
+		rows, err = d.fetch(ctx, "dhcp", pathDHCP)
+		if err != nil {
+			return nil, err
+		}
 	}
 	out := make([]device.DHCPLease, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, device.DHCPLease{
-			Hostname: pick(r, "HostName", "Host", "Name", "hostname"),
-			MAC:      pick(r, "MAC", "MACAddress", "MacAddress"),
-			IP:       pick(r, "IP", "IPAddress", "IpAddress", "address"),
+			Hostname: pick(r, "Name", "HostName", "Host", "hostname"),
+			MAC:      pick(r, "MACAddr", "MACAddress", "MAC", "MacAddress"),
+			IP:       pick(r, "IPAddr", "IPAddress", "IP", "IpAddress", "address"),
 			Lease:    pick(r, "LeaseTime", "Lease", "Expires"),
-			Status:   pick(r, "Status", "state"),
+			Status:   device.StringOr(pick(r, "Status", "state"), "reserved"),
 			Extra:    r,
 		})
 	}
 	return out, nil
+}
+
+// parseMenuInstances reads the ParaName/ParaValue pairs returned by the ZTE
+// menuData endpoints. Each <Instance> becomes one map.
+func parseMenuInstances(data []byte) []map[string]any {
+	text := strings.ReplaceAll(string(data), "&#32;", " ")
+	reInstance := regexp.MustCompile(`(?s)<Instance>(.*?)</Instance>`)
+	rePair := regexp.MustCompile(`(?s)<ParaName>(.*?)</ParaName>\s*<ParaValue>(.*?)</ParaValue>`)
+	rows := make([]map[string]any, 0)
+	for _, instance := range reInstance.FindAllStringSubmatch(text, -1) {
+		row := make(map[string]any)
+		for _, pair := range rePair.FindAllStringSubmatch(instance[1], -1) {
+			key := pair[1]
+			if i := strings.LastIndex(key, "."); i >= 0 {
+				key = key[i+1:]
+			}
+			row[key] = strings.TrimSpace(pair[2])
+		}
+		if len(row) > 0 {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+// postBindingRaw sends one reservation row using the exact payload shape the
+// H199A web UI produces. The fields have no row suffix, a new row uses
+// _OBJ_InstID=-1, and the Check header is sha256 of the full body.
+func (d *Driver) postBindingRaw(ctx context.Context, instanceID, name, mac, ip string) error {
+	sessionData, err := d.web.Get(ctx, pathLoginLua)
+	if err != nil {
+		return err
+	}
+	token := ""
+	if match := regexp.MustCompile(`"sess_token":"([^"]+)"`).FindSubmatch(sessionData); len(match) > 1 {
+		token = string(match[1])
+	}
+	payload := "IF_ACTION=Apply" +
+		"&OBJ_DHCPBIND_ID._OBJ_InstID=" + instanceID +
+		"&OBJ_DHCPBIND_ID.Name=" + url.QueryEscape(name) +
+		"&OBJ_DHCPBIND_ID.MACAddr=" + url.QueryEscape(mac) +
+		"&OBJ_DHCPBIND_ID.IPAddr=" + url.QueryEscape(ip) +
+		"&=" +
+		"&_sessionTOKEN=" + token
+	sum := sha256.Sum256([]byte(payload))
+	d.web.ExtraHeaders = map[string]string{
+		"Check":            hex.EncodeToString(sum[:]),
+		"X-Requested-With": "XMLHttpRequest",
+	}
+	defer func() {
+		d.web.ExtraHeaders = nil
+	}()
+	_, _, err = d.web.Request(ctx, http.MethodPost, d.cfg.Endpoint("dhcp_binding", pathBindingLua),
+		"application/x-www-form-urlencoded; charset=UTF-8", []byte(payload))
+	return err
+}
+
+// AddReservation creates a static DHCP binding.
+func (d *Driver) AddReservation(ctx context.Context, name, mac, ip string) error {
+	if err := d.ensure(ctx); err != nil {
+		return err
+	}
+	if mac == "" || ip == "" {
+		return fmt.Errorf("mac and ip are required")
+	}
+	if err := d.postBindingRaw(ctx, "-1", name, mac, ip); err != nil {
+		return err
+	}
+	check, err := d.web.Get(ctx, d.cfg.Endpoint("dhcp_binding", pathBindingLua))
+	if err != nil {
+		return err
+	}
+	for _, row := range parseMenuInstances(check) {
+		if strings.EqualFold(pick(row, "IPAddr"), ip) && strings.EqualFold(pick(row, "MACAddr"), mac) {
+			return nil
+		}
+	}
+	return fmt.Errorf("reservation %s -> %s was not saved", mac, ip)
+}
+
+// RenameReservation changes the name of an existing static binding.
+func (d *Driver) RenameReservation(ctx context.Context, oldName, newName string) error {
+	if err := d.ensure(ctx); err != nil {
+		return err
+	}
+	data, err := d.web.Get(ctx, d.cfg.Endpoint("dhcp_binding", pathBindingLua))
+	if err != nil {
+		return err
+	}
+	for _, row := range parseMenuInstances(data) {
+		if !strings.EqualFold(pick(row, "Name"), oldName) {
+			continue
+		}
+		return d.postBindingRaw(ctx, pick(row, "_OBJ_InstID"), newName, pick(row, "MACAddr"), pick(row, "IPAddr"))
+	}
+	return fmt.Errorf("reservation %q not found", oldName)
 }
 
 // WiFiClients reads the associated wireless stations.
@@ -459,6 +646,7 @@ var (
 	_ device.SystemDriver      = (*Driver)(nil)
 	_ device.InterfaceDriver   = (*Driver)(nil)
 	_ device.DHCPDriver        = (*Driver)(nil)
+	_ device.ReservationDriver = (*Driver)(nil)
 	_ device.WiFiDriver        = (*Driver)(nil)
 	_ device.PortForwardDriver = (*Driver)(nil)
 	_ device.LogsDriver        = (*Driver)(nil)

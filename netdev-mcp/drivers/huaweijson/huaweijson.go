@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"time"
 
@@ -22,9 +23,10 @@ const (
 
 // Driver reads the public JSON status endpoints of a Huawei BE3.
 type Driver struct {
-	cfg     device.Config
-	client  *http.Client
-	baseURL string
+	cfg           device.Config
+	client        *http.Client
+	baseURL       string
+	authenticated bool
 }
 
 // New creates the driver without opening a connection.
@@ -35,9 +37,13 @@ func New(cfg device.Config) (device.Driver, error) {
 		port = 443
 		scheme = "https"
 	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, err
+	}
 	return &Driver{
 		cfg:     cfg,
-		client:  &http.Client{Timeout: cfg.Duration(defaultTimeout)},
+		client:  &http.Client{Timeout: cfg.Duration(defaultTimeout), Jar: jar},
 		baseURL: scheme + "://" + cfg.Address(port),
 	}, nil
 }
@@ -48,7 +54,7 @@ func (d *Driver) Vendor() device.Vendor { return device.VendorHuaweiJSON }
 
 // Capabilities lists what this firmware exposes without a login.
 func (d *Driver) Capabilities() []string {
-	return []string{device.CapSystem}
+	return []string{device.CapSystem, device.CapWiFiConfig}
 }
 
 // Close releases idle connections.

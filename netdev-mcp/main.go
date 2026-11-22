@@ -13,7 +13,8 @@ import (
 func main() {
 	inventory := flag.String("inventory", "", "path to the device inventory JSON file")
 	listen := flag.String("listen", "", "serve JSON-RPC over HTTP on this address, for example 0.0.0.0:8765 for Tailscale access")
-	authSetup := flag.Bool("setup", false, "open the temporary browser form to authenticate and save devices, then exit")
+	authSetup := flag.Bool("setup", false, "open the temporary browser form only when no device has credentials, then exit")
+	forceSetup := flag.Bool("force-setup", false, "open the form even when the inventory already has credentials")
 	flag.Parse()
 
 	configs, err := loadInventory(*inventory)
@@ -24,11 +25,15 @@ func main() {
 
 	registry := newRegistry(configs)
 	if *authSetup {
+		if inventoryAuthenticated() && !*forceSetup {
+			log.Printf("netdev-mcp: devices already authenticated, skipping setup (use -force-setup to override)")
+			return
+		}
 		setup, urls, err := startSetup(registry)
 		if err != nil {
 			log.Fatal(err)
 		}
-		log.Printf("netdev-mcp: temporary setup page (expires in 15 minutes):")
+		log.Printf("netdev-mcp: temporary setup page (expires in 60 minutes):")
 		for _, url := range urls {
 			log.Printf("  %s", url)
 		}
