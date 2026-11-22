@@ -51,3 +51,12 @@ The `tools/list` schemas of the five ported servers are compared against the ori
 ## Sessions and secrets
 
 Servers that need a login (Mercado Livre, Shopee, Twitter) store cookies and browser profiles next to the server. These files are ignored by git and must never be committed.
+
+## CI and releases
+
+`.forgejo/workflows/release.yml` runs on Forgejo Actions:
+
+- Every push runs `go test ./...` and builds all six servers for `linux/amd64` and `windows/amd64`.
+- Every push to `master` updates the rolling GitHub release `master` in `gtihq/ai-mcps` with two archives, their SHA-256 checksums and a `build-info.txt` with the commit SHA. Assets are replaced on each push, so the release always holds the latest master artifacts.
+- The GitHub token is generated per job by `actions/create-github-app-token@v1` from the Forgejo secrets `GTI_CI_APP_ID` and `GTI_CI_APP_PRIVATE_KEY` (the `gti-ci` App from Vault `secret/infra/gti-ci`), with `contents: write`. No PAT is created.
+- The Forgejo repo must be a pull mirror of this repository; the workflow file arrives with the mirror sync. The `gti-ci` App needs access to the `gtihq` organization for publishing to succeed.

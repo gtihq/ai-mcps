@@ -1,0 +1,137 @@
+name: Build and Release
+
+# Forgejo Actions builds every push. The rolling GitHub release "master" is
+# refreshed on every push to master (assets are replaced with --clobber).
+# GH_TOKEN is short lived: it comes from the gti-ci GitHub App whose credentials
+# live in Vault and are injected as the Forgejo secrets GTI_CI_APP_ID and
+# GTI_CI_APP_PRIVATE_KEY. No personal access token is created here.
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ai-mcps-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REPO: gtihq/ai-mcps
+  RELEASE_TAG: master
+  GO_VERSION: "1.25.5"
+  SERVERS: kabum mercadolivre shopee twitter zoom netdev
+
+jobs:
+  build:
+    name: Build Linux and Windows binaries
+    runs-on: docker
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Go
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v go >/dev/null 2>&1 && go version | grep -Eq 'go1\.(2[5-9]|[3-9][0-9])'; then
+            echo "Using Go from the runner image: $(go version)"
+            echo "GO_BIN=$(command -v go)" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          url="https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+          tmp="$(mktemp -d)"
+          if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --retry 3 "$url" -o "$tmp/go.tgz"
+          elif command -v wget >/dev/null 2>&1; then
+            wget -qO "$tmp/go.tgz" "$url"
+          else
+            python3 -c "import urllib.request, sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" "$url" "$tmp/go.tgz"
+          fi
+          mkdir -p "$HOME/.local"
+          rm -rf "$HOME/.local/go"
+          tar -C "$HOME/.local" -xzf "$tmp/go.tgz"
+          echo "$HOME/.local/go/bin" >> "$GITHUB_PATH"
+          echo "GO_BIN=$HOME/.local/go/bin/go" >> "$GITHUB_ENV"
+          "$HOME/.local/go/bin/go" version
+
+      - name: Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$(dirname "$GO_BIN"):$PATH"
+          "$GO_BIN" test ./...
+
+      - name: Build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$(dirname "$GO_BIN"):$PATH"
+          release_dir="$PWD/release"
+          mkdir -p dist/linux dist/windows "$release_dir"
+          for name in $SERVERS; do
+            echo "Building $name for linux/amd64"
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 "$GO_BIN" build -trimpath -ldflags "-s -w" -o "dist/linux/${name}-mcp" "./${name}-mcp"
+            echo "Building $name for windows/amd64"
+            CGO_ENABLED=0 GOOS=windows GOARCH=amd64 "$GO_BIN" build -trimpath -ldflags "-s -w" -o "dist/windows/${name}-mcp.exe" "./${name}-mcp"
+          done
+          (cd dist/linux && tar -czf "$release_dir/ai-mcps-linux-amd64.tar.gz" *)
+          (cd dist/windows && python3 -m zipfile -c "$release_dir/ai-mcps-windows-amd64.zip" *)
+          (cd "$release_dir" && sha256sum ai-mcps-linux-amd64.tar.gz > ai-mcps-linux-amd64.tar.gz.sha256 && sha256sum ai-mcps-windows-amd64.zip > ai-mcps-windows-amd64.zip.sha256)
+          {
+            echo "commit: ${{ github.sha }}"
+            echo "branch: ${{ github.ref_name }}"
+            echo "built_at_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "go: $($GO_BIN version)"
+            echo "servers: $SERVERS"
+          } > "$release_dir/build-info.txt"
+          cat "$release_dir/build-info.txt"
+          ls -lh "$release_dir"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-mcps-release
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    name: Refresh GitHub release on master
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: docker
+
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GTI_CI_APP_ID }}
+          private-key: ${{ secrets.GTI_CI_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-mcps-release
+          path: release
+
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(release/*)
+          notes="release/build-info.txt"
+          if gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG exists, replacing its assets"
+            gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$REPO" --clobber
+            gh release edit "$RELEASE_TAG" --repo "$REPO" --title "GTI AI MCPs (master)" --notes-file "$notes"
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" \
+              --repo "$REPO" \
+              --title "GTI AI MCPs (master)" \
+              --notes-file "$notes"
+          fi
