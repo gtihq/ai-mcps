@@ -57,6 +57,6 @@ Servers that need a login (Mercado Livre, Shopee, Twitter) store cookies and bro
 `.forgejo/workflows/release.yml` runs on Forgejo Actions:
 
 - Every push runs `go test ./...` and builds all six servers for `linux/amd64` and `windows/amd64`.
-- Every push to `master` updates the rolling GitHub release `master` in `gtihq/ai-mcps` with two archives, their SHA-256 checksums and a `build-info.txt` with the commit SHA. Assets are replaced on each push, so the release always holds the latest master artifacts.
+- Every push to `master` updates the rolling GitHub release `master` in `gtihq/ai-mcps` with two archives, their SHA-256 checksums and a `build-info.txt` with the commit SHA. Assets are replaced on each push, so the release always holds the latest master artifacts. Publishing is idempotent, so overlapping runs do not corrupt the release.
 - The GitHub token is short lived and minted inline from the `gti-ci` App credentials in the Forgejo secrets `GTI_CI_APP_ID` and `GTI_CI_APP_PRIVATE_KEY` (Vault `secret/infra/gti-ci`). The Forgejo action mirror does not carry `create-github-app-token` or a working `upload-artifact@v4`, so token creation and publishing run in the same job. `scripts/publish-release.mjs` uses the GitHub REST API with Node (the runner image has no `gh`). No PAT is created.
 - The Forgejo repo must be a pull mirror of this repository; the workflow file arrives with the mirror sync. The `gti-ci` App needs access to the `gtihq` organization for publishing to succeed.
