@@ -10,7 +10,7 @@ Thumbs.db
 **/.venv/
 
 # Network device inventory contains credentials. Use devices.example.json as a template.
-netdev-mcp/devices.json
+mcps/netdev-mcp/devices.json
 netdev-mcp.exe
 netdev-mcp.exe~
 netdev-setup.log
