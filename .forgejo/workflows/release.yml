@@ -89,35 +89,19 @@ jobs:
           cat "$release_dir/build-info.txt"
           ls -lh "$release_dir"
 
-      - name: Upload release assets
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-mcps-release
-          path: release/*
-          if-no-files-found: error
-
-  publish:
-    name: Refresh GitHub release on master
-    needs: build
-    if: github.ref == 'refs/heads/master'
-    runs-on: docker
-
-    steps:
+      # Forgejo Actions does not support upload-artifact@v4, so build and
+      # publish stay in one job and share the local release directory.
       - name: Generate GitHub App token
         id: app-token
+        if: github.ref == 'refs/heads/master'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.GTI_CI_APP_ID }}
           private-key: ${{ secrets.GTI_CI_APP_PRIVATE_KEY }}
           permission-contents: write
 
-      - name: Download release assets
-        uses: actions/download-artifact@v4
-        with:
-          name: ai-mcps-release
-          path: release
-
       - name: Publish rolling release
+        if: github.ref == 'refs/heads/master'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         shell: bash
