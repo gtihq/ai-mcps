@@ -124,17 +124,4 @@ jobs:
       - name: Publish rolling release
         if: github.ref == 'refs/heads/master'
         shell: bash
-        run: |
-          set -euo pipefail
-          files=(release/*)
-          notes="release/build-info.txt"
-          if gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG exists, replacing its assets"
-            gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$REPO" --clobber
-            gh release edit "$RELEASE_TAG" --repo "$REPO" --title "GTI AI MCPs (master)" --notes-file "$notes"
-          else
-            gh release create "$RELEASE_TAG" "${files[@]}" \
-              --repo "$REPO" \
-              --title "GTI AI MCPs (master)" \
-              --notes-file "$notes"
-          fi
+        run: node scripts/publish-release.mjs
