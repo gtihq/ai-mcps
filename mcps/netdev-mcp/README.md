@@ -1,8 +1,41 @@
-# NetDev MCP server
+<div align="center">
+
+# NetDev MCP
+
+> One normalized MCP surface for multi-vendor network devices
+
+**It dispatches each tool call to the right MikroTik, ZTE, Huawei or SSH driver over the repository `internal/mcpserver` stdio transport.**
+
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8.svg)](#requirements)
+[![Protocol](https://img.shields.io/badge/protocol-stdio%20JSON--RPC-blue.svg)](#overview)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)](#requirements)
+
+</div>
+
+---
+
+## Overview
 
 A single Go MCP server for routers and switches from multiple vendors. Instead of running one MCP per device family, it exposes one normalized tool surface and dispatches each call to the right driver. It started as an aggregation of ideas from RouterOS MCP, wiresage/mikrotik-mcp, MikroMCP, generic SSH MCP servers and the Huawei/ZTE home gateway web APIs. It uses the repository `internal/mcpserver` stdio transport.
 
-## Run
+### HTTP mode (optional)
+
+Stdio mode is the default. HTTP mode is optional and useful for dev because it is also reachable through Tailscale:
+
+```bash
+NETDEV_HTTP_TOKEN=change-me ./netdev-mcp -listen 0.0.0.0:8765
+curl -H 'Authorization: Bearer change-me' http://<tailscale-ip>:8765/healthz
+```
+
+In HTTP mode POST JSON-RPC messages to `/mcp`. The sequence `initialize`, `tools/list`, `tools/call` works the same as over stdio. Device connections use inventory `host` values directly, so Tailscale IPs and MagicDNS names work without extra setup.
+
+## Requirements
+
+- Go 1.25 or later on Linux or Windows.
+- An inventory with device hosts and credentials, set up once as described under Login.
+- No API key is required. A bearer token is only needed for optional HTTP mode.
+
+## Build and run
 
 Build the binary from this directory:
 
@@ -16,22 +49,19 @@ On Windows, use `go build -o netdev-mcp.exe .`. You can also run it without buil
 go run .
 ```
 
+## Register with your agent
+
 Register the server with your agent. The command it runs is the built binary. For example, for OpenCode:
 
 ```bash
 opencode mcp add netdev --global -- /absolute/path/to/ai-mcps/mcps/netdev-mcp/netdev-mcp
 ```
 
-Stdio mode is the default. HTTP mode is optional and useful for dev because it is also reachable through Tailscale:
+## Login
 
-```bash
-NETDEV_HTTP_TOKEN=change-me ./netdev-mcp -listen 0.0.0.0:8765
-curl -H 'Authorization: Bearer change-me' http://<tailscale-ip>:8765/healthz
-```
+Devices are reached with the credentials in the inventory, so there is no central account to log in to. Two helpers cover first-time setup.
 
-In HTTP mode POST JSON-RPC messages to `/mcp`. The sequence `initialize`, `tools/list`, `tools/call` works the same as over stdio. Device connections use inventory `host` values directly, so Tailscale IPs and MagicDNS names work without extra setup.
-
-## Setup screen
+### Setup screen
 
 The first time there are no saved credentials, open the temporary authentication page:
 
@@ -41,7 +71,7 @@ The first time there are no saved credentials, open the temporary authentication
 
 Or call the `netdev_setup` MCP tool. Both are no-ops when the inventory already has a device with username and password: the tool returns `status: not_needed` and `-setup` exits. Use `-force-setup` to reopen the form on purpose. The page shows the current inventory on the left and the add form on the right. It expires after 60 minutes. Use `netdev_setup_status` to check whether it is still open.
 
-## Inventory
+### Inventory
 
 Copy `devices.example.json` to `devices.json` (gitignored) or set `NETDEV_INVENTORY` to another path. `NETDEV_DEVICES` accepts a JSON array and skips the file entirely. Every string expands `${ENV_VAR}`, so keep credentials in environment variables.
 
@@ -94,6 +124,15 @@ Fields: `name`, `vendor`, `model`, `site`, `host`, `port`, `username`, `password
 
 All device-scoped tools take a `device` argument with the inventory name. Drivers advertise capabilities, so unsupported operations return a clear `error` object.
 
+## Environment
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `NETDEV_INVENTORY` | `devices.json` | Path to the inventory JSON file |
+| `NETDEV_DEVICES` | unset | Inventory as a JSON array, overrides the file |
+| `NETDEV_HTTP_TOKEN` | unset | Bearer token required by HTTP mode |
+| `NETDEV_DEBUG_ZTE` | unset | Prints the ZTE login flow to stderr |
+
 ## Layout
 
 | Path | Responsibility |
@@ -106,15 +145,6 @@ All device-scoped tools take a `device` argument with the inventory name. Driver
 | `device/` | Vendor-neutral types and driver contracts |
 | `drivers/` | MikroTik, ZTE, Huawei XML, Huawei JSON, SSH CLI and autodetect drivers |
 | `*_test.go` | Tests with `testing`, `httptest` and a fake RouterOS API socket |
-
-## Environment
-
-| Variable | Purpose |
-|----------|---------|
-| `NETDEV_INVENTORY` | Path to the inventory JSON file |
-| `NETDEV_DEVICES` | Inventory as a JSON array, overrides the file |
-| `NETDEV_HTTP_TOKEN` | Bearer token required by HTTP mode |
-| `NETDEV_DEBUG_ZTE` | Prints the ZTE login flow to stderr |
 
 ## Development
 

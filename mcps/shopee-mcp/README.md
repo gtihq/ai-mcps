@@ -1,10 +1,26 @@
-# Shopee MCP server
+<div align="center">
+
+# Shopee MCP
+
+> Products, deals, shops, reviews and orders on Shopee across 9 markets
+
+**It scrapes public endpoints over HTTP and runs logged-in searches in a real Chrome window, matching the former Python server tool for tool.**
+
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8.svg)](#requirements)
+[![Protocol](https://img.shields.io/badge/protocol-stdio%20JSON--RPC-blue.svg)](#overview)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)](#requirements)
+
+</div>
+
+---
+
+## Overview
 
 An MCP server that searches products, flash deals, shop profiles, reviews, trending searches and categories on Shopee across 9 markets. It is a Go port of the former Python server and speaks the same JSON-RPC 2.0 stdio protocol, with the same 12 tools, descriptions, argument schemas and response shapes.
 
 No API key. Keyword search requires a one-time login because Shopee only serves search results to a logged-in browser.
 
-## Why the search opens a browser window
+### Why the search opens a browser window
 
 Shopee protects search with an anti-bot token (`af-ac-enc-dat`) that only the page itself can generate. Plain HTTP and headless browsers are rejected with error `90309999`. The server therefore runs the search in a real, visible Chrome window and reads the JSON response the page loads.
 
@@ -15,7 +31,14 @@ It is deliberately conservative because it runs on real customer accounts:
 - **Minimum gap between searches.** `SHOPEE_MIN_INTERVAL_SECONDS` (default `10`) is enforced after the previous search finishes.
 - Slow is fine; hammering is not.
 
-## Run
+## Requirements
+
+- Go 1.25 or later on Linux or Windows.
+- Google Chrome with a visible window for `search_products` and `list_orders`.
+- A one-time login so the saved browser profile can be reused.
+- No API key is required.
+
+## Build and run
 
 Build the binary from this directory:
 
@@ -29,6 +52,18 @@ On Windows, use `go build -o shopee-mcp.exe .`. You can also run it without buil
 go run .
 ```
 
+## Register with your agent
+
+Register the server with your agent. The command it runs is the built binary. For example, for OpenCode:
+
+```bash
+opencode mcp add shopee --global -- /absolute/path/to/ai-mcps/mcps/shopee-mcp/shopee-mcp
+```
+
+## Login
+
+### One-time login
+
 Log in once (opens a visible Chrome window). The helper saves a dedicated profile in `.browser-profile/` and a backup in `cookies.json`:
 
 ```bash
@@ -36,12 +71,6 @@ go run . --login
 ```
 
 Do not delete the profile: Shopee trusts a browser that has completed a login, and `search_products` and `list_orders` reuse the same profile. Both files contain real session material and are ignored by git.
-
-Register the server with your agent. The command it runs is the built binary. For example, for OpenCode:
-
-```bash
-opencode mcp add shopee --global -- /absolute/path/to/ai-mcps/mcps/shopee-mcp/shopee-mcp
-```
 
 ## Tools
 
@@ -62,6 +91,15 @@ opencode mcp add shopee --global -- /absolute/path/to/ai-mcps/mcps/shopee-mcp/sh
 
 `sort` accepts `relevancy`, `sales`, `newest`, `price_asc`, `price_desc`. Prices are in the market currency (BRL for `country=br`). The default country is `br`. Markets are `sg`, `my`, `th`, `vn`, `ph`, `id`, `tw`, `br`, `mx`. A product or shop link carries its own market and overrides the `country` argument.
 
+## Environment
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SHOPEE_MIN_INTERVAL_SECONDS` | `10` | Minimum gap between two browser searches |
+| `SHOPEE_PROXY` | unset | Proxy URL for the plain HTTP scraper calls |
+
+`SHOPEE_HEADLESS` is no longer used: search requires a visible window.
+
 ## Layout
 
 | Path | Responsibility |
@@ -77,15 +115,6 @@ opencode mcp add shopee --global -- /absolute/path/to/ai-mcps/mcps/shopee-mcp/sh
 | `tools.go` | The 12 MCP tool definitions, handlers and search-item parser |
 | `browser.go` | Real-browser search, cookies, `list_orders` and the login helper |
 | `shopee/fixtures/` | Captured Shopee pages and JSON used by the tests |
-
-## Environment
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `SHOPEE_MIN_INTERVAL_SECONDS` | `10` | Minimum gap between two browser searches |
-| `SHOPEE_PROXY` | unset | Proxy URL for the plain HTTP scraper calls |
-
-`SHOPEE_HEADLESS` is no longer used: search requires a visible window.
 
 ## Development
 
