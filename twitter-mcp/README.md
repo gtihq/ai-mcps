@@ -1,74 +1,75 @@
 # Twitter MCP server
 
-An MCP server that reads and posts on X (Twitter) by driving a logged-in headless Chromium, with no API key.
+An MCP server that reads and posts on X (Twitter) by driving a logged-in headless Chromium, with no API key. It is a Go port of the former Python server and speaks the same JSON-RPC 2.0 stdio protocol.
 
 ## Overview
 
-This package is the `twitter` MCP server that the [X Research](../../../skills/x-research/README.md) skill calls. It is a fork of [Miles0sage/twitter-mcp](https://github.com/Miles0sage/twitter-mcp) (MIT, see [LICENSE](LICENSE)), changed to survive real research sessions:
+This package is the `twitter` MCP server. All 12 tools share one browser session: the first tool call launches one Chromium on a persistent profile and every later call reuses it on a single tab, one call at a time. Each full page load of x.com calls the rate-limited `Viewer` API, so the server navigates inside the loaded app instead of reloading.
 
-- **One shared browser:** the first tool call launches one Chromium on a persistent profile, and every later call reuses it on a single tab. Calls run one at a time. Each full page load of x.com calls the rate-limited `Viewer` API, so the server navigates inside the loaded app instead of reloading.
-- **Headless by default:** the window only appears with `TWITTER_MCP_HEADLESS=0` or during `login.py`.
-- **Typed errors:** a failed call returns one line, `Error [KIND]: ...`. `RATE_LIMITED` includes the reset time, and calls made before that time fail at once without contacting X. The kinds are defined in `x_state.py`.
-- **Pacing and retries:** at least `TWITTER_MCP_MIN_INTERVAL` seconds between page loads, and two retries with backoff for `PAGE_ERROR` and `TIMEOUT`.
+Failures return one line starting with `Error [KIND]: ...`. `RATE_LIMITED` includes the reset time, and calls made before that time fail at once without contacting X. The kinds are defined in `x_state.go`. At least `TWITTER_MCP_MIN_INTERVAL` seconds pass between page loads, and `PAGE_ERROR` and `TIMEOUT` are retried twice with backoff.
 
-The server does not bypass X limits, CAPTCHAs, or login checks. It needs an X account that you log in to once with `login.py`. Engagement counts come from the public FxTwitter API when it answers, and from the page otherwise.
+The server does not bypass X limits, CAPTCHAs, or login checks. It needs an X account that you log in to once. Engagement counts come from the public FxTwitter API when it answers, and from the page otherwise.
 
 ## Run
 
-Install the dependencies and the Chromium build that Playwright uses:
+Install the Chromium build that playwright-go uses, then build the binary from this directory:
 
 ```bash
-python -m pip install -r twitter-mcp/requirements.txt
-python -m playwright install chromium
+go run github.com/mxschmitt/playwright-go/cmd/playwright install chromium
+go build -o twitter-mcp .
+```
+
+On Windows, use `go build -o twitter-mcp.exe .`. You can also run it without building:
+
+```bash
+go run .
 ```
 
 Log in once. Run this while no MCP server is running, because two browsers cannot share the profile:
 
 ```bash
-python twitter-mcp/login.py
+./twitter-mcp --login
 ```
 
-Register the server with your agent. The command it runs is:
+Register the server with your agent. The command it runs is the built binary. For example, for OpenCode:
 
 ```bash
-python twitter-mcp/server.py
+opencode mcp add twitter --global -- /absolute/path/to/ai-mcps/twitter-mcp/twitter-mcp
 ```
 
-For example, for OpenCode:
+## Tools
 
-```bash
-opencode mcp add twitter --global -- python /absolute/path/to/ai-mcps/twitter-mcp/server.py
-```
+| Tool | Description |
+|------|-------------|
+| `twitter_status` | Report the MCP state without contacting X: rate-limit block and settings |
+| `twitter_search` | Search tweets by keyword (latest tab) |
+| `twitter_user` | Get a user's profile (bio, followers, following) |
+| `twitter_user_tweets` | Get recent tweets from a user |
+| `twitter_trending` | Get trending topics |
+| `twitter_post` | Post a tweet |
+| `twitter_reply` | Reply to a tweet |
+| `twitter_like` | Like a tweet |
+| `twitter_retweet` | Retweet a tweet |
+| `twitter_feed` | Read the home feed |
+| `twitter_notifications` | Read notifications and mentions |
+| `twitter_bookmarks` | Read saved/bookmarked tweets |
 
-To try the read tools without an agent, from the package folder:
-
-```bash
-cd twitter-mcp
-python tools_read.py "CVE" "from:TheHackerWire"
-```
+Every tool returns a string. Tool names, descriptions, property order, defaults and error strings match the Python server.
 
 ## Layout
 
 | Path | Responsibility |
 |------|----------------|
-| `server.py` | MCP entry point: tool definitions, `twitter_status`, and error formatting |
-| `browser_session.py` | Shared browser session: launch, single tab, serialized calls, pacing, rate-limit circuit breaker, settings |
-| `x_state.py` | Error kinds and the classifier that turns page and network state into a result or a typed error. No Playwright import |
-| `tools_read.py` | `twitter_search`, `twitter_user`, `twitter_user_tweets`, `twitter_trending`, and the navigation and wait logic |
-| `tools_feed.py` | `twitter_feed`, `twitter_notifications`, `twitter_bookmarks` |
-| `tools_write.py` | `twitter_post`, `twitter_reply`, `twitter_like`, `twitter_retweet` |
-| `login.py` | Opens a visible browser on the profile for a one-time login |
-| `twitter_keepalive.py` | Optional standalone ping that keeps the session cookies fresh; logs to `data/` |
-| `tests/` | Unit tests for `x_state.py` |
-
-## Scripts
-
-| Command | Action |
-|---------|--------|
-| `python server.py` | Start the MCP server on stdio |
-| `python login.py` | Log in to X in a visible browser and save the session |
-| `python tools_read.py [QUERY ...]` | Run searches from the terminal and print the results or the typed error |
-| `python twitter_keepalive.py` | Load x.com once to refresh cookies; exits 1 when the session expired |
+| `main.go` | Entry point, `--login` and `--keepalive` helpers |
+| `server.go` | The 12 tool definitions, argument parsing and typed error formatting |
+| `session.go` | Shared browser, one tab, serialized calls, pacing and rate-limit circuit breaker |
+| `x_state.go` | Error kinds, classifier and typed error messages |
+| `tools_read.go` | Search, profile, user tweets, trending, navigation and wait logic |
+| `tools_feed.go` | Home feed, notifications and bookmarks |
+| `tools_write.go` | Post, reply, like and retweet |
+| `x_state_test.go` | Classifier and error message tests |
+| `tools_test.go` | Tool schema and `twitter_status` tests, with no browser contact |
+| `LICENSE` | License for this server |
 
 ## Environment
 
@@ -81,12 +82,21 @@ python tools_read.py "CVE" "from:TheHackerWire"
 
 The session cookies are also backed up to `~/.twitter-mcp/storage_state.json`. A new, empty profile is seeded from that file.
 
+## Keepalive
+
+```bash
+./twitter-mcp --keepalive
+```
+
+It loads x.com once to refresh cookies, prints one status line and appends a JSON line to `data/twitter_keepalive.log` next to the executable. It exits 1 when the session expired.
+
 ## Testing
 
 ```bash
-python -m unittest discover -s twitter-mcp/tests -v
+go test ./twitter-mcp/...
+go vet ./twitter-mcp/...
 ```
 
-The tests cover the classifier in `x_state.py`: results, empty results, the blank page that X shows with HTTP 429 on `Viewer`, login redirects, missing accounts, changed selectors, timeouts, and the error message format. They do not touch the network or launch a browser. `npm test` runs them with the other Python tests.
+The tests cover the classifier, typed errors, all 12 tool schemas and `twitter_status`. They do not touch the network or launch a browser.
 
-See [../../../README.md](../../../README.md) for the full repository.
+See [../README.md](../README.md) for the full repository.

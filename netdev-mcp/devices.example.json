@@ -1,0 +1,64 @@
+{
+  "devices": [
+    {
+      "name": "rb5009",
+      "vendor": "mikrotik",
+      "model": "RB5009UG+S+",
+      "site": "home-lab",
+      "host": "100.x.y.z",
+      "username": "admin",
+      "password": "${NETDEV_RB5009_PASSWORD}",
+      "tls": false,
+      "insecure_tls": true,
+      "timeout": "15s"
+    },
+    {
+      "name": "zxhn-h199a",
+      "vendor": "zte",
+      "model": "ZXHN H199A",
+      "site": "home",
+      "host": "192.168.1.1",
+      "username": "admin",
+      "password": "${NETDEV_H199A_PASSWORD}",
+      "endpoints": {
+        "login": "/login.lua",
+        "system": "/getpage.lua?pid=1000",
+        "interfaces": "/getpage.lua?pid=1001",
+        "dhcp": "/getpage.lua?pid=1002",
+        "wifi": "/getpage.lua?pid=1003",
+        "port_forwards": "/getpage.lua?pid=1004",
+        "logs": "/getpage.lua?pid=1005",
+        "reboot": "/reboot.lua"
+      }
+    },
+    {
+      "name": "wifi-be3",
+      "vendor": "huawei",
+      "model": "WiFi BE3",
+      "site": "home",
+      "host": "192.168.3.1",
+      "username": "admin",
+      "password": "${NETDEV_BE3_PASSWORD}",
+      "endpoints": {
+        "token": "/api/webserver/SesTokInfo",
+        "system": "/api/system/routerstatus",
+        "interfaces": "/api/system/interface",
+        "wifi": "/api/wlan/station/infos",
+        "dhcp": "/api/dhcp/settings",
+        "port_forwards": "/api/security/portmapping/entries",
+        "logs": "/api/log/loglist",
+        "reboot": "/api/device/control"
+      }
+    },
+    {
+      "name": "sw-acc",
+      "vendor": "ssh",
+      "model": "Catalyst 9300",
+      "site": "office",
+      "host": "100.x.y.z",
+      "username": "netops",
+      "password": "${NETDEV_SSW_PASSWORD}",
+      "profile": "cisco"
+    }
+  ]
+}
