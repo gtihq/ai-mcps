@@ -11,6 +11,7 @@ const repo = process.env.REPO || "gtihq/ai-mcps";
 const tag = process.env.RELEASE_TAG || "master";
 const dir = process.env.RELEASE_DIR || "release";
 const dryRun = process.env.DRY_RUN === "1";
+const targetCommitish = process.env.TARGET_COMMITISH || null;
 const api = "https://api.github.com";
 
 if (!token && !dryRun) {
@@ -44,6 +45,22 @@ async function request(path, options = {}) {
     return { status: response.status, ok: response.ok, body };
 }
 
+/**
+ * Retries a request a few times. Used for the release lookup, because two
+ * workflow runs can overlap while GitHub is still creating the release.
+ */
+async function requestRetry(path, options = {}, attempts = 5) {
+    let last;
+    for (let i = 0; i < attempts; i += 1) {
+        last = await request(path, options);
+        if (last.ok) {
+            return last;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    return last;
+}
+
 const files = (await readdir(dir)).filter((file) => !file.endsWith(".tmp")).sort();
 const notes = await readFile(join(dir, "build-info.txt"), "utf8");
 
@@ -53,23 +70,32 @@ if (dryRun) {
     process.exit(0);
 }
 
-let release = await request(`/repos/${repo}/releases/tags/${tag}`);
+let release = await requestRetry(`/repos/${repo}/releases/tags/${tag}`);
 if (release.status === 404) {
+    const createBody = {
+        tag_name: tag,
+        name: `GTI AI MCPs (${tag})`,
+        body: notes,
+        draft: false,
+        prerelease: false,
+    };
+    if (targetCommitish) {
+        createBody.target_commitish = targetCommitish;
+    }
     const created = await request(`/repos/${repo}/releases`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            tag_name: tag,
-            name: `GTI AI MCPs (${tag})`,
-            body: notes,
-            draft: false,
-            prerelease: false,
-        }),
+        body: JSON.stringify(createBody),
     });
-    if (!created.ok) {
-        throw new Error(`create release failed: ${created.status} ${JSON.stringify(created.body)}`);
+    if (created.ok) {
+        release = created;
+    } else {
+        // Another run may have created the release between our GET and POST.
+        release = await requestRetry(`/repos/${repo}/releases/tags/${tag}`);
+        if (!release.ok) {
+            throw new Error(`create release failed: ${created.status} ${JSON.stringify(created.body)}`);
+        }
     }
-    release = created;
 } else if (!release.ok) {
     throw new Error(`get release failed: ${release.status} ${JSON.stringify(release.body)}`);
 } else {
@@ -93,7 +119,7 @@ for (const asset of existing.body || []) {
         continue;
     }
     const removed = await request(`/repos/${repo}/releases/assets/${asset.id}`, { method: "DELETE" });
-    if (!removed.ok) {
+    if (!removed.ok && removed.status !== 404) {
         throw new Error(`delete asset ${asset.name} failed: ${removed.status} ${JSON.stringify(removed.body)}`);
     }
 }
