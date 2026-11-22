@@ -19,7 +19,7 @@ python server.py
 For example, for OpenCode:
 
 ```bash
-opencode mcp add kabum --global -- python /absolute/path/to/gti-skills/mcps/kabum-mcp/server.py
+opencode mcp add kabum --global -- python /absolute/path/to/ai-mcps/kabum-mcp/server.py
 ```
 
 ## Layout

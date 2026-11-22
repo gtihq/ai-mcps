@@ -18,32 +18,32 @@ The server does not bypass X limits, CAPTCHAs, or login checks. It needs an X ac
 Install the dependencies and the Chromium build that Playwright uses:
 
 ```bash
-python -m pip install -r packages/python/twitter-mcp/requirements.txt
+python -m pip install -r twitter-mcp/requirements.txt
 python -m playwright install chromium
 ```
 
 Log in once. Run this while no MCP server is running, because two browsers cannot share the profile:
 
 ```bash
-python packages/python/twitter-mcp/login.py
+python twitter-mcp/login.py
 ```
 
 Register the server with your agent. The command it runs is:
 
 ```bash
-python packages/python/twitter-mcp/server.py
+python twitter-mcp/server.py
 ```
 
 For example, for OpenCode:
 
 ```bash
-opencode mcp add twitter --global -- python /absolute/path/to/gti-skills/packages/python/twitter-mcp/server.py
+opencode mcp add twitter --global -- python /absolute/path/to/ai-mcps/twitter-mcp/server.py
 ```
 
 To try the read tools without an agent, from the package folder:
 
 ```bash
-cd packages/python/twitter-mcp
+cd twitter-mcp
 python tools_read.py "CVE" "from:TheHackerWire"
 ```
 
@@ -84,7 +84,7 @@ The session cookies are also backed up to `~/.twitter-mcp/storage_state.json`. A
 ## Testing
 
 ```bash
-python -m unittest discover -s packages/python/twitter-mcp/tests -v
+python -m unittest discover -s twitter-mcp/tests -v
 ```
 
 The tests cover the classifier in `x_state.py`: results, empty results, the blank page that X shows with HTTP 429 on `Viewer`, login redirects, missing accounts, changed selectors, timeouts, and the error message format. They do not touch the network or launch a browser. `npm test` runs them with the other Python tests.

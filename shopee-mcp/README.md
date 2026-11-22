@@ -40,7 +40,7 @@ python mcp_server.py
 For example, for OpenCode:
 
 ```bash
-opencode mcp add shopee --global -- python /absolute/path/to/gti-skills/mcps/shopee-mcp/mcp_server.py
+opencode mcp add shopee --global -- python /absolute/path/to/ai-mcps/shopee-mcp/mcp_server.py
 ```
 
 ## Tools

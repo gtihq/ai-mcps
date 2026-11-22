@@ -21,7 +21,7 @@ python server.py
 For example, for OpenCode:
 
 ```bash
-opencode mcp add mercadolivre --global -- python /absolute/path/to/gti-skills/mcps/mercadolivre-mcp/server.py
+opencode mcp add mercadolivre --global -- python /absolute/path/to/ai-mcps/mercadolivre-mcp/server.py
 ```
 
 ## Layout

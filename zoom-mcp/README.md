@@ -19,7 +19,7 @@ python server.py
 For example, for OpenCode:
 
 ```bash
-opencode mcp add zoom --global -- python /absolute/path/to/gti-skills/mcps/zoom-mcp/server.py
+opencode mcp add zoom --global -- python /absolute/path/to/ai-mcps/zoom-mcp/server.py
 ```
 
 ## Layout
