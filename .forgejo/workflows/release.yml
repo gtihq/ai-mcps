@@ -2,9 +2,9 @@ name: Build and Release
 
 # Forgejo Actions builds every push. The rolling GitHub release "master" is
 # refreshed on every push to master (assets are replaced with --clobber).
-# GH_TOKEN is short lived: it comes from the gti-ci GitHub App whose credentials
-# live in Vault and are injected as the Forgejo secrets GTI_CI_APP_ID and
-# GTI_CI_APP_PRIVATE_KEY. No personal access token is created here.
+# GH_TOKEN is short lived: it is minted inline from the gti-ci GitHub App whose
+# credentials live in Vault and are injected as the Forgejo secrets GTI_CI_APP_ID
+# and GTI_CI_APP_PRIVATE_KEY. No personal access token is created here.
 
 on:
   push:
@@ -91,19 +91,38 @@ jobs:
 
       # Forgejo Actions does not support upload-artifact@v4, so build and
       # publish stay in one job and share the local release directory.
+      # The Forgejo action mirror does not carry create-github-app-token, so
+      # the short-lived App token is minted inline with Node (already in the
+      # runner image). No long-lived PAT is ever created or stored here.
       - name: Generate GitHub App token
-        id: app-token
         if: github.ref == 'refs/heads/master'
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.GTI_CI_APP_ID }}
-          private-key: ${{ secrets.GTI_CI_APP_PRIVATE_KEY }}
-          permission-contents: write
+        env:
+          APP_ID: ${{ secrets.GTI_CI_APP_ID }}
+          PRIVATE_KEY: ${{ secrets.GTI_CI_APP_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(node <<'NODE'
+          const crypto = require('crypto');
+          const now = Math.floor(Date.now() / 1000);
+          const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+          const input = b64({ alg: 'RS256', typ: 'JWT' }) + '.' + b64({ iat: now - 60, exp: now + 540, iss: process.env.APP_ID });
+          const jwt = input + '.' + crypto.createSign('RSA-SHA256').update(input).sign(process.env.PRIVATE_KEY).toString('base64url');
+          (async () => {
+            const headers = { Authorization: 'Bearer ' + jwt, 'User-Agent': 'ai-mcps-ci' };
+            const inst = await (await fetch('https://api.github.com/app/installations', { headers })).json();
+            const gti = inst.find((i) => i.account.login === 'gtihq');
+            if (!gti) throw new Error('gti-ci App is not installed on gtihq');
+            const res = await fetch('https://api.github.com/app/installations/' + gti.id + '/access_tokens', { method: 'POST', headers });
+            if (!res.ok) throw new Error('access_tokens failed: ' + res.status);
+            process.stdout.write((await res.json()).token);
+          })().catch((e) => { console.error(e.message); process.exit(1); });
+          NODE
+          )"
+          echo "GH_TOKEN=$token" >> "$GITHUB_ENV"
 
       - name: Publish rolling release
         if: github.ref == 'refs/heads/master'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         shell: bash
         run: |
           set -euo pipefail
